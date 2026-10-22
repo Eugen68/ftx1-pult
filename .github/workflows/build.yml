@@ -5,7 +5,10 @@ name: Build FTX1-Pult.exe
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
