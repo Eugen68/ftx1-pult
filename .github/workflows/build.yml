@@ -48,7 +48,16 @@ jobs:
         with:
           name: FTX1-Pult
           path: dist/FTX1-Pult.exe
-      - if: startsWith(github.ref, 'refs/tags/')
+      - name: Релиз «последняя сборка»
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: latest
+          name: FTX-1 Пульт — последняя сборка
+          body: |
+            Скачайте **FTX1-Pult.exe**, положите в любую папку и запустите двойным кликом.
+            Python не нужен. Настройки (config.json) и журнал появятся рядом с exe.
+            Сборка: ${{ github.sha }}
+          make_latest: true
+          overwrite_files: true
           files: dist/FTX1-Pult.exe
