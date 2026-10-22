@@ -43,9 +43,9 @@ FTX-1 **не передаёт картинку своей панорамы по 
 Сначала установите драйвер **Virtual COM Port (CP210x)** с сайта Yaesu и подключите FTX-1 кабелем USB.
 В «Диспетчере устройств» появятся *Enhanced COM Port*, *Standard COM Port* и звук *USB Audio CODEC*.
 
-**Вариант А — готовый FTX1-Pult.exe** (Python не нужен). Получить exe:
-`build_exe.bat` на любом ПК с Python, или загрузите проект на GitHub — сборка в разделе
-*Actions* (файл `.github/workflows/build.yml`). Затем просто запускайте `FTX1-Pult.exe`.
+**Вариант А — готовый FTX1-Pult.exe** (Python не нужен): скачайте его со страницы
+[Releases → latest](https://github.com/Evgeny161rus/ftx1-pult/releases/tag/latest) и запускайте двойным кликом.
+Каждое изменение в ветке `main` пересобирает exe автоматически (GitHub Actions); собрать вручную — `build_exe.bat`.
 
 **Вариант Б — без сборки.** Установите Python 3.10+ с python.org (галочка *Add python.exe to PATH*)
 и запустите двойным кликом `FTX1-Pult.pyw`. При первом запуске программа сама предложит
