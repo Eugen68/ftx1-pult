@@ -235,4 +235,19 @@ function addLog(l) {
   while (el.childNodes.length > 400) el.removeChild(el.firstChild);
   if (atEnd) el.scrollTop = el.scrollHeight;
 }
+// Масштаб окна: «авто» — под размер экрана (макет рассчитан на ~1080×860)
+const scaleOpt = (() => { try { return localStorage.getItem('ftx1.panelScale') || 'auto'; } catch { return 'auto'; } })();
+$('#scale').value = scaleOpt;
+function applyScale() {
+  let z = parseFloat($('#scale').value);
+  if (!(z > 0)) {
+    const w = innerWidth, h = innerHeight;
+    z = w < 700 ? 1 : Math.max(0.8, Math.min(2.2, Math.min(w / 1080, h / 860)));
+    z = Math.round(z * 20) / 20;
+  }
+  document.documentElement.style.zoom = z;
+}
+$('#scale').onchange = () => { try { localStorage.setItem('ftx1.panelScale', $('#scale').value); } catch { } applyScale(); };
+addEventListener('resize', () => { if ($('#scale').value === 'auto') applyScale(); });
+applyScale();
 connect();

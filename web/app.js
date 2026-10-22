@@ -63,9 +63,11 @@ const C = {                         // состояние клиента
   mic: null, micNode: null, micGainNode: null, micStream: null,
   pttPressed: false, txOwner: false, pttBusy: false, txStart: 0, keepalive: null,
   lockUntil: {},                    // ключ -> время, до которого не принимаем значение с сервера
-  wfMax: store.get('wfMax', 4000),
+  wfMax: store.get('wfMax', 0),          // выбранный обзор водопада, 0 = авто
+  span: 4000, bw: 0,                      // действующий обзор и измеренная полоса звука трансивера
 };
-const opts = Object.assign({ echo: true, ns: true, agc: false, muteTx: true, pttMode: 'hold', space: true, palette: 'classic', micGain: 100, micId: '' }, store.get('opts', {}));
+const opts = Object.assign({ echo: true, ns: true, agc: false, muteTx: true, pttMode: 'hold', space: true, palette: 'classic', micGain: 100, micId: '',
+  sqMode: 'radio', sqThr: -60, tail: 500, scale: 'auto' }, store.get('opts', {}));
 
 // ------------------------------------------------------------------ связь
 function send(o) { if (C.ws && C.ws.readyState === 1) C.ws.send(JSON.stringify(o)); }
@@ -102,18 +104,19 @@ function connect() {
         fillSelect($('.ctl[data-k=ctcss] select'), m.ctcss.map((v, i) => [i, v.toFixed(1)]));
         $('#srvInfo').textContent = `Сервер v${m.version}. PTT: ${m.ptt_method}. Ограничение передачи: ${m.max_tx} с.` + (m.audio_err ? ` ЗВУК: ${m.audio_err}` : '');
         setWfMsg(m.audio_err);
-        send({ t: 'wf', on: true, max: C.wfMax });
+        updateSpan(true);
         if (C.audioOn) send({ t: 'audio', on: true, rate: C.rate });
         break;
       case 'auth_fail':
         $('#login').classList.remove('hidden'); $('#loginMsg').textContent = m.msg; break;
       case 'state': applyState(m.s, m.full); break;
       case 'lv': break;
+      case 'bw': C.bw = m.hz; updateSpan(); break;
       case 'ptt_owner':
         C.txOwner = m.you; C.pttBusy = m.busy && !m.you;
         if (C.txOwner && !C.txStart) C.txStart = performance.now();
         if (!C.txOwner) C.txStart = 0;
-        updatePtt(); break;
+        updatePtt(); pushGate(); break;
       case 'note': toast(m.msg, 4000); break;
       case 'audio_status': setWfMsg(m.err); break;
       case 'raw': catLine(m.line); break;
@@ -167,6 +170,9 @@ function applyState(d, full) {
   drawOverlay();
   if ('tuning' in d) $('#tuneState').textContent = S.tuning ? 'Идёт настройка…' : '';
   if ('tx' in d) document.body.classList.toggle('txon', !!S.tx);
+  if ('mode' in d) { if (!C.wfMax && !C.bw) updateSpan(); }
+  if ('busy' in d || 'tx' in d) pushGate();
+  if ('sql' in d) renderSq();
 }
 
 function renderBadges() {
@@ -178,6 +184,7 @@ function renderBadges() {
   $('#bClar').textContent = (S.clar_rx || S.clar_tx) ? `CLAR ${S.clar > 0 ? '+' : ''}${S.clar}` : 'CLAR';
   $('#bLock').classList.toggle('off', !S.lock);
   $('#bTx').classList.toggle('off', !S.tx);
+  $('#bBusy').classList.toggle('off', !S.busy);
   $('#freqB').textContent = S.freq_b ? fmtFreq(S.freq_b) : '—';
   $('#btnSplit').classList.toggle('on', !!S.split);
   $('#btnLock').classList.toggle('on', !!S.lock);
@@ -451,7 +458,7 @@ function drawSpectrum() {
   ctx.clearRect(0, 0, W, H);
   if (!a) return;
   const floor = -130 + +$('#wfFloor').value * 0.5, range = +$('#wfRange').value;
-  const span = C.wfMax;
+  const span = C.span;
   ctx.beginPath();
   for (let x = 0; x < W; x++) {
     const hz = x / W * span, i = Math.min(a.length - 1, Math.round(hz / wf.binHz));
@@ -472,7 +479,7 @@ function passband() {
 }
 function drawOverlay() {
   const c = wf.ov; if (!c.width) return;
-  const ctx = c.getContext('2d'), W = c.width, H = c.height, span = C.wfMax, X = hz => hz / span * W;
+  const ctx = c.getContext('2d'), W = c.width, H = c.height, span = C.span, X = hz => hz / span * W;
   const dpr = W / c.clientWidth;
   ctx.clearRect(0, 0, W, H);
   const [lo, hi] = passband();
@@ -505,7 +512,7 @@ function tuneToAudio(a) {
 }
 (() => {
   const w = $('#wfWrap'), cur = $('#wfCursor');
-  const aAt = e => { const r = w.getBoundingClientRect(); return clamp((e.clientX - r.left) / r.width, 0, 1) * C.wfMax; };
+  const aAt = e => { const r = w.getBoundingClientRect(); return clamp((e.clientX - r.left) / r.width, 0, 1) * C.span; };
   w.addEventListener('pointermove', e => {
     const a = aAt(e), r = w.getBoundingClientRect();
     cur.style.display = 'block'; cur.style.left = (e.clientX - r.left) + 'px';
@@ -522,15 +529,50 @@ function tuneToAudio(a) {
   });
   w.addEventListener('wheel', e => { e.preventDefault(); nudge(e.deltaY < 0 ? 1 : -1); }, { passive: false });
 })();
+// Обзор водопада. «Авто» — по измеренной полосе звука трансивера (в FM она шире, чем в SSB),
+// пока не измерена — по виду работы.
+function autoSpan() {
+  if (C.bw) return clamp(Math.ceil(C.bw * 1.05 / 500) * 500, 2000, 24000);
+  const m = S.mode || '';
+  return /FM|C4FM/.test(m) ? 9000 : /^AM/.test(m) ? 6000 : isCW(m) ? 3000 : 4000;
+}
+function updateSpan(force) {
+  const span = C.wfMax || autoSpan();
+  $$('#spanSeg button').forEach(x => x.classList.toggle('on', +x.dataset.v === C.wfMax));
+  const ab = $('#spanSeg button[data-v="0"]');
+  ab.textContent = C.wfMax ? 'Авто' : `Авто ${(span / 1000).toFixed(span % 1000 ? 1 : 0)}k`;
+  if (span === C.span && !force) return;
+  C.span = span; wf.canvas.width = 0;
+  send({ t: 'wf', on: true, max: span }); drawOverlay();
+}
 $$('#spanSeg button').forEach(b => {
-  b.classList.toggle('on', +b.dataset.v === C.wfMax);
-  b.onclick = () => {
-    C.wfMax = +b.dataset.v; store.set('wfMax', C.wfMax); wf.canvas.width = 0;
-    $$('#spanSeg button').forEach(x => x.classList.toggle('on', x === b));
-    send({ t: 'wf', on: true, max: C.wfMax }); drawOverlay();
-  };
+  b.onclick = () => { C.wfMax = +b.dataset.v; store.set('wfMax', C.wfMax); updateSpan(true); };
 });
 window.addEventListener('resize', sizeCanvases);
+
+// ------------------------------------------------------------------ шумодав
+function pushGate() {
+  if (!C.player) return;
+  C.player.port.postMessage({ gate: {
+    mode: opts.sqMode, busy: S.busy === undefined ? true : !!S.busy, thr: opts.sqThr,
+    tx: !!S.tx || (C.pttPressed && C.txOwner), tailMs: opts.tail,
+  } });
+}
+function renderSq() {
+  $$('#sqMode button').forEach(b => b.classList.toggle('on', b.dataset.v === opts.sqMode));
+  $('#sqRadioCtl').classList.toggle('hidden', opts.sqMode === 'level');
+  $('#sqLevelCtl').classList.toggle('hidden', opts.sqMode !== 'level');
+  if (S.sql != null && !(C.lockUntil.sql > performance.now())) $('#sqRadio').value = S.sql;
+  $('#sqRadioV').textContent = S.sql ?? '—';
+  $('#sqThr').value = opts.sqThr; $('#sqThrV').textContent = opts.sqThr + ' дБ';
+}
+$$('#sqMode button').forEach(b => b.onclick = () => { opts.sqMode = b.dataset.v; saveOpts(); renderSq(); pushGate(); });
+$('#sqThr').oninput = e => { opts.sqThr = +e.target.value; saveOpts(); renderSq(); pushGate(); };
+$('#sqRadio').oninput = e => {
+  $('#sqRadioV').textContent = e.target.value;
+  clearTimeout(e.target._t); e.target._t = setTimeout(() => setParam('sql', +e.target.value), 80);
+  C.lockUntil.sql = performance.now() + 1200;
+};
 
 // ------------------------------------------------------------------ звук приёма
 async function ensureAudioContext() {
@@ -545,11 +587,18 @@ async function ensureAudioContext() {
   C.player.connect(ac.destination);
   C.player.port.postMessage({ rate: C.rate || 16000 });
   C.player.port.onmessage = e => {
+    if (e.data.sq) {
+      const q = e.data.sq;
+      $('#sqLamp').className = 'sq-lamp ' + (C.audioOn ? (q.open ? 'open' : 'closed') : '');
+      $('#sqLvl').textContent = C.audioOn ? `${Math.round(q.lvl)} дБ` : '';
+      return;
+    }
     const s = e.data.stat; if (!s) return;
     $('#audioStat').textContent = `Приём: ${C.rate / 1000} кГц, звуковая карта ${ac.sampleRate / 1000} кГц, буфер ${s.ms} мс, ` +
       `пропусков ${s.under}, подстройка ${((s.adj - 1) * 100).toFixed(2)} %`;
   };
   C.player.port.postMessage({ gain: C.gain });
+  pushGate();
   return ac;
 }
 $('#btnAudio').onclick = async () => {
@@ -611,6 +660,7 @@ async function pttDown() {
   if (!C.pttPressed) return;                // отпустили, пока включался микрофон
   send({ t: 'ptt', on: true });
   if (opts.muteTx && C.player) C.player.port.postMessage({ mute: true });
+  pushGate();
   clearInterval(C.keepalive);
   C.keepalive = setInterval(() => send({ t: 'ptt_alive' }), 400);
 }
@@ -620,6 +670,7 @@ function pttUp() {
   clearInterval(C.keepalive);
   send({ t: 'ptt', on: false });
   if (C.player) C.player.port.postMessage({ mute: false });
+  pushGate();
   updatePtt();
 }
 function updatePtt() {
@@ -789,6 +840,10 @@ function resetMic() {
   updatePtt();
 }
 function initOpts() {
+  $('#optTail').value = opts.tail; $('#optTailV').textContent = opts.tail;
+  $('#optTail').oninput = e => { opts.tail = +e.target.value; $('#optTailV').textContent = opts.tail; saveOpts(); pushGate(); };
+  $('#optScale').value = String(opts.scale);
+  $('#optScale').onchange = e => { opts.scale = e.target.value; saveOpts(); applyScale(); };
   $('#optRate').value = C.rate;
   $('#optRate').onchange = e => {
     C.rate = +e.target.value; store.set('rate', C.rate);
@@ -826,9 +881,29 @@ $('#btnFull').onclick = () => {
 };
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => { });
 
+// ------------------------------------------------------------------ масштаб интерфейса
+// «Авто»: макет рассчитан на окно ~1440×860; на больших экранах увеличиваем, на маленьких
+// ноутбуках — немного уменьшаем. На телефонах (узкий экран) — 100 %.
+function applyScale() {
+  let z = parseFloat(opts.scale);
+  if (!(z > 0)) {
+    const w = window.innerWidth, h = window.innerHeight;
+    z = w < 760 ? 1 : clamp(Math.min(w / 1440, h / 860), 0.8, 2.4);
+    z = Math.round(z * 20) / 20;
+  }
+  if (document.documentElement.style.zoom !== String(z)) {
+    document.documentElement.style.zoom = z;
+    C.zoom = z;
+    sizeCanvases();
+  }
+}
+window.addEventListener('resize', () => { if (opts.scale === 'auto') applyScale(); });
+
 // ------------------------------------------------------------------ старт
 initControls();
 initOpts();
+applyScale();
+renderSq();
 renderFavs();
 buildLut();
 sizeCanvases();

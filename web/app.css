@@ -53,7 +53,7 @@ code { font-family: var(--mono); color: var(--lcd); }
 .layout {
   display: grid; gap: 10px; padding: 10px;
   grid-template-columns: minmax(0, 1fr);
-  max-width: 1500px; margin: 0 auto;
+  max-width: 2400px; margin: 0 auto;
 }
 @media (min-width: 1100px) {
   .layout { grid-template-columns: 430px minmax(0, 1fr); grid-template-areas: "disp wf" "tune wf" "tabs tabs"; }
@@ -71,6 +71,16 @@ code { font-family: var(--mono); color: var(--lcd); }
 .badge.mode { background: var(--accent-2); color: #fff; }
 .badge.off { background: transparent; color: #33475a; border: 1px solid #22313f; }
 .badge.tx { background: var(--tx); color: #fff; }
+.badge.busy { background: #1d6b3d; color: #d6ffe4; }
+.badge.busy.off { background: transparent; color: #2f4a3a; border: 1px solid #22313f; }
+.sq-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.sq-title { font-size: 12px; color: var(--muted); }
+.sq-ctl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); flex: 1; min-width: 160px; }
+.sq-ctl input { flex: 1; min-width: 80px; }
+.sq-ctl b { font: 600 12px var(--mono); color: var(--lcd); min-width: 48px; text-align: right; }
+.sq-lamp { width: 12px; height: 12px; border-radius: 50%; background: #3a4655; flex: none; }
+.sq-lamp.open { background: var(--ok); box-shadow: 0 0 8px #3ddc8488; }
+.sq-lamp.closed { background: #6b2525; }
 .badge.tx.off { background: transparent; color: #4a2a2a; border-color: #3a2020; }
 .small-b { font-size: 10px; padding: 3px 5px; }
 .freq {

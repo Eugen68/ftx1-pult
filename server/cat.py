@@ -124,6 +124,7 @@ PARSERS = [
     (r'AO(\d{3})', lambda m: {'amc': int(m.group(1))}),
     (r'AI(\d)', lambda m: {'ai': int(m.group(1))}),
     (r'ID(\d{4})', lambda m: {'radio_id': m.group(1)}),
+    (r'RI\d{7}(\d)\d*', lambda m: {'busy': m.group(1) == '1'}),   # P8: шумоподавитель открыт / сигнал
     (r'VE(\d)(.*)', lambda m: {'fw%s' % m.group(1): m.group(2)}),
     (r'MS(\d)(\d)', lambda m: {'meter_sel': int(m.group(1))}),
     (r'DA(\d{2})\d*', lambda m: {'dimmer': int(m.group(1))}),
@@ -221,7 +222,7 @@ class SerialPtt:
 
 
 # --------------------------------------------------------------------- Rig
-FAST_RX = ['SM0;']
+FAST_RX = ['SM0;', 'RI0;']
 FAST_TX = ['RM5;', 'RM6;', 'RM4;', 'RM3;']
 MEDIUM = ['FA;', 'FB;', 'MD0;', 'TX;']
 SLOW = ['MD1;', 'AG0;', 'RG0;', 'SQ0;', 'PC;', 'MG;', 'VX;', 'VG;', 'VD;', 'NL0;', 'RL0;',
@@ -369,7 +370,7 @@ class Rig:
         rx = {'AG': 3, 'RG': 3, 'SQ': 3, 'SM': 3, 'RM': 3, 'MD': 3, 'NL': 3, 'RL': 3, 'BC': 3,
               'BP': 4, 'CO': 4, 'IS': 3, 'SH': 3, 'GT': 3, 'PA': 3, 'RA': 3, 'NA': 3, 'PR': 3,
               'ML': 3, 'CF': 5, 'CT': 3, 'CN': 4, 'OS': 3, 'VE': 3, 'EX': 8, 'SS': 4, 'SC': 3,
-              'MC': 3, 'VM': 3, 'MR': 7, 'MT': 7}
+              'MC': 3, 'VM': 3, 'MR': 7, 'MT': 7, 'RI': 3}
         n = rx.get(c[:2])
         return n is not None and len(c) == n
 

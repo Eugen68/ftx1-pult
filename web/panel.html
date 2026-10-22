@@ -61,6 +61,9 @@
   .wizard ol { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; }
   .saved { color: var(--ok); font-size: 12px; opacity: 0; transition: opacity .3s; }
   .saved.show { opacity: 1; }
+  .scale-sel { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); border-radius: 7px; padding: 4px 6px; font-size: 12px; }
+  .wrap { max-width: 1600px; }
+  @media (min-width: 1500px) { .cols { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); } }
   .advanced summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-bottom: 8px; }
 </style>
 </head>
@@ -71,6 +74,10 @@
     <div><h1>FTX-1 Пульт — сервер</h1><div class="ver" id="ver"></div></div>
     <span class="spacer"></span>
     <span class="saved" id="saved">✓ Сохранено</span>
+    <select id="scale" title="Масштаб окна" class="scale-sel">
+      <option value="auto">Масштаб: авто</option><option value="0.8">80 %</option><option value="0.9">90 %</option><option value="1">100 %</option>
+      <option value="1.1">110 %</option><option value="1.25">125 %</option><option value="1.5">150 %</option><option value="1.75">175 %</option><option value="2">200 %</option>
+    </select>
   </div>
 
   <section class="panel wizard hidden" id="wizard">

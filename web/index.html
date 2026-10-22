@@ -43,6 +43,7 @@
         <span class="badge off" id="bSplit">SPLIT</span>
         <span class="badge off" id="bClar">CLAR</span>
         <span class="badge off" id="bLock">LOCK</span>
+        <span class="badge busy off" id="bBusy" title="Шумоподавитель трансивера открыт — есть сигнал">BUSY</span>
         <span class="badge tx off" id="bTx">TX</span>
       </div>
       <div class="freq" id="freqA" title="Колесо или клик по верхней/нижней половине цифры — изменить разряд"></div>
@@ -65,7 +66,7 @@
   <section class="panel wfpanel">
     <div class="wf-tools">
       <div class="seg" id="spanSeg">
-        <button data-v="3000">3k</button><button data-v="4000" class="on">4k</button><button data-v="6000">6k</button><button data-v="12000">12k</button><button data-v="24000">24k</button>
+        <button data-v="0" title="По реальной полосе звука трансивера">Авто</button><button data-v="3000">3k</button><button data-v="4000">4k</button><button data-v="6000">6k</button><button data-v="8000">8k</button><button data-v="12000">12k</button><button data-v="24000">24k</button>
       </div>
       <label class="mini">Пол<input id="wfFloor" type="range" min="0" max="200" value="70"></label>
       <label class="mini">Конт<input id="wfRange" type="range" min="20" max="160" value="80"></label>
@@ -96,6 +97,16 @@
     </div>
     <div class="btn-grid bands" id="bands"></div>
     <div class="btn-grid modes" id="modes"></div>
+    <div class="sq-row" id="sqRow">
+      <span class="sq-title">Шумодав</span>
+      <div class="seg" id="sqMode">
+        <button data-v="off">Выкл</button><button data-v="radio" title="По шумоподавителю трансивера (SQL)">По ТРХ</button><button data-v="level" title="По уровню сигнала — порог ниже">По уровню</button>
+      </div>
+      <label class="sq-ctl" id="sqRadioCtl" title="SQL трансивера: чем больше, тем сильнее нужен сигнал">SQL <input type="range" id="sqRadio" min="0" max="255"><b id="sqRadioV">—</b></label>
+      <label class="sq-ctl hidden" id="sqLevelCtl" title="Порог открытия по уровню звука">Порог <input type="range" id="sqThr" min="-100" max="-10"><b id="sqThrV"></b></label>
+      <span class="sq-lamp" id="sqLamp" title="Звук открыт / закрыт шумодавом"></span>
+      <span class="muted small mono" id="sqLvl"></span>
+    </div>
   </section>
 
   <!-- ===== Вкладки ===== -->
@@ -254,6 +265,9 @@
         <label class="chk"><input type="checkbox" id="optNs" checked> Шумоподавление микрофона</label>
         <label class="chk"><input type="checkbox" id="optAgc"> Автоусиление микрофона (AGC браузера)</label>
         <label class="chk"><input type="checkbox" id="optMuteTx" checked> Глушить приём во время передачи</label>
+        <label>Глушить «хвост» после передачи, мс <input id="optTail" type="range" min="0" max="2000" step="50" value="500"><span id="optTailV">500</span></label>
+        <label>Масштаб интерфейса
+          <select id="optScale"><option value="auto">Авто — под размер экрана</option><option value="0.8">80 %</option><option value="0.9">90 %</option><option value="1">100 %</option><option value="1.1">110 %</option><option value="1.25">125 %</option><option value="1.5">150 %</option><option value="1.75">175 %</option><option value="2">200 %</option></select></label>
         <label>Кнопка PTT
           <select id="optPttMode"><option value="hold">Удерживать</option><option value="toggle">Нажал — передача, ещё раз — приём</option></select></label>
         <label class="chk"><input type="checkbox" id="optSpace" checked> Пробел = PTT (на ПК)</label>

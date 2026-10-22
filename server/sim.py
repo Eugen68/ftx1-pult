@@ -39,6 +39,10 @@ class SimRadio:
             return 'VE01.10;'
         if cmd == 'VE4':
             return 'VE41.02;'
+        if cmd == 'RI0':
+            sig = 60 + 40 * np.sin(time.time() / 3)
+            busy = self.s['TX'] == '0' and sig > int(self.s['SQ0'])
+            return 'RI0000000%d;' % (1 if busy else 0)
         if cmd in ('SM0', 'SM1'):
             v = 0 if self.s['TX'] != '0' else int(60 + 40 * np.sin(time.time() / 3) + np.random.randint(0, 12))
             return '%s%03d;' % (cmd, max(0, v))
@@ -141,10 +145,21 @@ class SimAudio:
     def stop(self):
         self._stop = True
 
+    def _lp(self, cut):
+        if getattr(self, '_cut', None) != cut:
+            n = np.arange(255) - 127
+            h = np.sinc(2 * cut / SR * n) * np.blackman(255)
+            self._h, self._cut, self._zi = (h / h.sum()).astype(np.float32), cut, np.zeros(254, np.float32)
+        return self._h
+
     def _block(self):
         t = (self.n + np.arange(BLOCK)) / SR
         self.n += BLOCK
-        x = np.random.randn(BLOCK).astype(np.float32) * 0.003
+        mode = self.radio.s.get('MD0', '2')
+        h = self._lp(8000 if mode in ('4', 'A', 'B', 'F') else 3000)
+        w = np.random.randn(BLOCK).astype(np.float32) * 0.01
+        buf = np.concatenate([self._zi, w]); self._zi = buf[-254:]
+        x = np.convolve(buf, h, mode='valid').astype(np.float32) + np.random.randn(BLOCK).astype(np.float32) * 2e-5
         if self.radio.s['TX'] != '0':
             return x * 0.1
         f0 = self.radio.freq()

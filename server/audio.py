@@ -89,6 +89,27 @@ class Waterfall:
         self.norm = 20 * np.log10(self.win.sum() / 2)
         self.buf = np.zeros(0, np.float32)
         self.bin_hz = SR / self.N
+        self.avg = None          # усреднённый спектр, дБ — для измерения полосы
+        self.nrows = 0
+        self.bandwidth = 0       # реальная полоса звука трансивера, Гц (0 — ещё не измерена)
+
+    def _measure(self, db):
+        """Где кончается звук трансивера: дальше по частоте — только шум USB-кодека (на 20+ дБ ниже)."""
+        self.avg = db if self.avg is None else self.avg * 0.9 + db * 0.1
+        self.nrows += 1
+        if self.nrows % 25:
+            return
+        a = self.avg
+        lo, hi = int(300 / self.bin_hz), int(2500 / self.bin_hz)
+        ref = float(np.median(a[lo:hi]))
+        floor = float(np.median(a[int(20000 / self.bin_hz):]))
+        if ref - floor < 15:                 # тишина (закрыт шумоподавитель) — не меряем
+            return
+        thr = max(ref - 20, floor + 6)          # край полосы — где уровень упал на 20 дБ
+        sm = np.convolve(np.pad(a, 4, mode='edge'), np.ones(9) / 9, mode='valid')
+        above = np.nonzero(sm[lo:] > thr)[0]
+        if len(above):
+            self.bandwidth = int((lo + above[-1]) * self.bin_hz)
 
     def process(self, x):
         """Возвращает список строк (np.uint8, N/2 бинов)."""
@@ -99,6 +120,7 @@ class Waterfall:
             self.buf = self.buf[self.HOP:]
             spec = np.abs(np.fft.rfft(seg))[:self.N // 2] + 1e-12
             db = 20 * np.log10(spec) - self.norm          # дБ относительно полной шкалы
+            self._measure(db)
             rows.append(np.clip((db + 130) * 2, 0, 255).astype(np.uint8))  # 0.5 дБ/ступень
         return rows
 

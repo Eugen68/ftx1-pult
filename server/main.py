@@ -41,7 +41,7 @@ from cat import Rig, SerialTransport, SerialPtt, CTCSS  # noqa: E402
 from audio import SR, Decimator, Interpolator, Waterfall  # noqa: E402
 from webserver import WebServer  # noqa: E402
 
-VERSION = "1.3"
+VERSION = "1.4"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -388,6 +388,10 @@ class Station:
                 if c.audio and c.authed and c.rate == rate:
                     c.ws.send_bin(pkt)
         rows = self.wf.process(x)
+        bw = self.wf.bandwidth
+        if bw and abs(bw - getattr(self, '_bw_sent', 0)) > 300:
+            self._bw_sent = bw
+            self.broadcast({'t': 'bw', 'hz': bw})
         if rows and any(c.wf for c in self.clients):
             for row in rows:
                 for c in self.clients:
@@ -619,6 +623,8 @@ class Station:
                                 'max_tx': self.cfg['max_tx_seconds'], 'ptt_method': self.cfg['ptt_method']})
                 c.ws.send_json({'t': 'state', 's': self.rig.state if self.rig else {'connected': False}, 'full': True})
                 c.ws.send_json({'t': 'audio_status', 'err': self.audio_err if self.running else 'Связь с трансивером остановлена'})
+                if self.wf.bandwidth:
+                    c.ws.send_json({'t': 'bw', 'hz': self.wf.bandwidth})
                 if not self.running:
                     c.ws.send_json({'t': 'note', 'msg': 'Сервер запущен, но связь с трансивером остановлена — нажмите «Запустить» в панели управления'})
                 self._ptt_info()

@@ -27,9 +27,13 @@ class RxPlayer extends AudioWorkletProcessor {
     this.ring = new Float32Array(sampleRate * 4);
     this.setRate(16000);
     this.statT = 0; this.underruns = 0;
+    // шумодав: решение принимается по мере поступления звука (синхронно с ним)
+    this.gate = { mode: 'radio', busy: true, thr: -60, tx: false, tailMs: 500 };
+    this.gGain = 1; this.levelHang = 0; this.tail = 0; this.wasTx = false; this.lvl = -120;
     this.port.onmessage = (e) => {
       const m = e.data;
-      if (m.pcm) this.push(m.pcm);
+      if (m.pcm) this.push(this.squelch(m.pcm));
+      else if (m.gate) Object.assign(this.gate, m.gate);
       else if (m.rate) this.setRate(m.rate);
       else if ('gain' in m) this.gain = m.gain;
       else if ('mute' in m) this.mute = m.mute;
@@ -53,6 +57,34 @@ class RxPlayer extends AudioWorkletProcessor {
   reset() {
     this.w = 0; this.r = 0; this.fill = 0; this.frac = 0;
     this.buffering = true; this.err = 0;
+  }
+  squelch(pcm) {
+    const g = this.gate, n = pcm.length, rate = this.inRate;
+    let s = 0; for (let i = 0; i < n; i++) s += pcm[i] * pcm[i];
+    this.lvl = 10 * Math.log10(s / n + 1e-12);
+    // хвост после передачи: держим закрытым tailMs после окончания TX
+    if (g.tx) { this.wasTx = true; this.tail = 0; }
+    else if (this.wasTx) { this.wasTx = false; this.tail = Math.round(g.tailMs / 1000 * rate); }
+    let hold = g.tx;
+    if (!hold && this.tail > 0) { hold = true; this.tail -= n; }
+    let open;
+    if (g.mode === 'off') open = true;
+    else if (g.mode === 'radio') open = g.busy !== false;
+    else {                                            // по уровню, с удержанием 400 мс
+      if (this.lvl > g.thr) this.levelHang = Math.round(0.4 * rate);
+      else this.levelHang = Math.max(0, this.levelHang - n);
+      open = this.levelHang > 0;
+    }
+    const target = (open && !hold) ? 1 : 0;
+    if (target === 1 && this.gGain === 1) return pcm;
+    if (target === 0 && this.gGain === 0) return new Float32Array(n);
+    const step = 1 / (0.006 * rate);                  // плавно за 6 мс, без щелчков
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      this.gGain = target > this.gGain ? Math.min(1, this.gGain + step) : Math.max(0, this.gGain - step);
+      out[i] = pcm[i] * this.gGain;
+    }
+    return out;
   }
   _put(v) {
     this.ring[this.w] = v; this.w = (this.w + 1) % this.ring.length; this.fill++;
@@ -107,6 +139,9 @@ class RxPlayer extends AudioWorkletProcessor {
     if (this.statT >= sampleRate) {
       this.statT = 0;
       this.port.postMessage({ stat: { ms: Math.round(this.fill / this.midRate * 1000), under: this.underruns, adj } });
+    }
+    if (this.statT % 4800 < out.length) {             // ~10 раз в секунду: уровень и состояние шумодава
+      this.port.postMessage({ sq: { lvl: this.lvl, open: this.gGain > 0.5 } });
     }
     return true;
   }
