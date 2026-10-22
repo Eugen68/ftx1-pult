@@ -246,7 +246,8 @@
     <div class="tab" id="tab-opts">
       <div class="opts">
         <label>Качество звука по сети
-          <select id="optRate"><option value="16000">16 кГц (ЛВС, Wi-Fi)</option><option value="8000">8 кГц (мобильный интернет)</option></select></label>
+          <select id="optRate"><option value="48000">48 кГц — без сжатия (этот ПК, проводная сеть)</option><option value="16000">16 кГц (Wi-Fi, телефон дома)</option><option value="8000">8 кГц (мобильный интернет)</option></select></label>
+        <p class="muted small" id="audioStat"></p>
         <label>Микрофон этого устройства <select id="optMic"><option value="">По умолчанию</option></select></label>
         <label>Усиление микрофона, % <input id="optMicGain" type="range" min="10" max="400" value="100"><span id="optMicGainV">100</span></label>
         <label class="chk"><input type="checkbox" id="optEcho" checked> Эхоподавление</label>

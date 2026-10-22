@@ -8,6 +8,7 @@
 """
 import logging
 import threading
+import time
 import numpy as np
 
 log = logging.getLogger("audio")
@@ -26,6 +27,11 @@ def lowpass_taps(cutoff, sr, n=95):
 class Decimator:
     """48 кГц -> 48/factor кГц с сохранением хвоста между блоками."""
 
+    def __new__(cls, factor):
+        if factor == 1:
+            return _Passthrough(1)
+        return super().__new__(cls)
+
     def __init__(self, factor):
         self.f = factor
         self.taps = lowpass_taps(0.45 * SR / factor, SR)
@@ -41,8 +47,23 @@ class Decimator:
         return out
 
 
+class _Passthrough:
+    """48 кГц без пересчёта."""
+
+    def __init__(self, factor=1):
+        self.f = 1
+
+    def process(self, x):
+        return x
+
+
 class Interpolator:
     """rate -> 48 кГц: вставка нулей + ФНЧ."""
+
+    def __new__(cls, factor):
+        if factor == 1:
+            return _Passthrough(1)
+        return super().__new__(cls)
 
     def __init__(self, factor):
         self.f = factor
@@ -248,22 +269,37 @@ class SoundDeviceAudio:
         self.names = (sd.query_devices(ind)['name'], sd.query_devices(outd)['name'])
         log.info("Звук: приём с [%s] %s, передача на [%s] %s", ind, self.names[0], outd, self.names[1])
 
+        self.overflows = self.underflows = 0
+        self._last_report = time.monotonic()
+
         def in_cb(indata, frames, t, status):
+            if status.input_overflow:
+                self.overflows += 1
             x = indata[:, 0].astype(np.float32)
             self.rx_level = float(np.sqrt(np.mean(x * x)))
             self.on_rx(x)
+            now = time.monotonic()
+            if now - self._last_report > 60 and (self.overflows or self.underflows):
+                log.warning("Звук: потерь при приёме %d, при передаче %d за минуту", self.overflows, self.underflows)
+                self.overflows = self.underflows = 0
+                self._last_report = now
 
         def out_cb(outdata, frames, t, status):
+            if status.output_underflow:
+                self.underflows += 1
             y = self.tx.pull(frames) * self.tx_gain
             outdata[:, 0] = np.clip(y, -1, 1)
 
+        # 'high' — запас по задержке у драйвера (MME): без потерь блоков; на общую задержку
+        # почти не влияет, её определяет буфер в браузере
         sin = sd.InputStream(device=ind, samplerate=SR, channels=1, dtype='float32',
-                             blocksize=BLOCK, callback=in_cb, latency='low')
+                             blocksize=BLOCK, callback=in_cb, latency='high')
         sout = sd.OutputStream(device=outd, samplerate=SR, channels=1, dtype='float32',
-                               blocksize=BLOCK, callback=out_cb, latency='low')
+                               blocksize=BLOCK, callback=out_cb, latency='high')
         sin.start()
         sout.start()
         self.streams = [sin, sout]
+        log.info("Звук: задержка драйвера приём %.0f мс, передача %.0f мс", sin.latency * 1000, sout.latency * 1000)
 
     def stop(self):
         for s in self.streams:

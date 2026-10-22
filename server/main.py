@@ -41,7 +41,7 @@ from cat import Rig, SerialTransport, SerialPtt, CTCSS  # noqa: E402
 from audio import SR, Decimator, Interpolator, Waterfall  # noqa: E402
 from webserver import WebServer  # noqa: E402
 
-VERSION = "1.2"
+VERSION = "1.3"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -278,7 +278,7 @@ class Station:
         self.busy = False
         self.last_error = ''
         self.audio_err = None
-        self.decims = {16000: Decimator(3), 8000: Decimator(6)}
+        self.decims = {48000: Decimator(1), 16000: Decimator(3), 8000: Decimator(6)}
         self.wf = Waterfall()
         self.ptt_owner = None
         self.ptt_since = 0.0
@@ -613,7 +613,7 @@ class Station:
             pw = self.cfg.get('password') or ''
             if c.local or (pw and m.get('pw') == pw):
                 c.authed = True
-                c.rate = 8000 if m.get('rate') == 8000 else 16000
+                c.rate = m.get('rate') if m.get('rate') in (8000, 16000, 48000) else 16000
                 c.ws.send_json({'t': 'hello_ok', 'local': c.local, 'version': VERSION,
                                 'audio_err': self.audio_err, 'ctcss': CTCSS, 'running': self.running,
                                 'max_tx': self.cfg['max_tx_seconds'], 'ptt_method': self.cfg['ptt_method']})
@@ -634,7 +634,7 @@ class Station:
             return
         if t == 'audio':
             c.audio = bool(m.get('on'))
-            if m.get('rate') in (8000, 16000):
+            if m.get('rate') in (8000, 16000, 48000):
                 c.rate = m['rate']
             return
         if t == 'wf':

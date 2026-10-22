@@ -58,7 +58,7 @@ function widthHz(code, mode) {
 const S = {};                       // состояние трансивера (зеркало сервера)
 const C = {                         // состояние клиента
   ws: null, authed: false, local: false, info: {},
-  rate: store.get('rate', 16000), pw: store.get('pw', ''),
+  rate: store.get('rate', 0), pw: store.get('pw', ''),          // 0 = выбрать по месту (ПК — 48 кГц, сеть — 16 кГц)
   audioOn: false, ac: null, player: null, gain: store.get('vol', 100) / 100,
   mic: null, micNode: null, micGainNode: null, micStream: null,
   pttPressed: false, txOwner: false, pttBusy: false, txStart: 0, keepalive: null,
@@ -81,7 +81,7 @@ function connect() {
   const ws = new WebSocket(`${proto}//${location.host}/ws`);
   ws.binaryType = 'arraybuffer';
   C.ws = ws;
-  ws.onopen = () => send({ t: 'hello', pw: C.pw, rate: C.rate });
+  ws.onopen = () => send({ t: 'hello', pw: C.pw, rate: C.rate || 16000 });
   ws.onclose = () => {
     C.authed = false; setLink(false, 'нет связи с сервером');
     if (C.txOwner) { C.txOwner = false; updatePtt(); }
@@ -93,6 +93,10 @@ function connect() {
     switch (m.t) {
       case 'hello_ok':
         C.authed = true; C.local = m.local; C.info = m;
+        if (!C.rate) {                                   // первый вход: на этом ПК — максимальное качество
+          C.rate = m.local ? 48000 : 16000; $('#optRate').value = C.rate;
+          C.player && C.player.port.postMessage({ rate: C.rate });
+        }
         $('#login').classList.add('hidden');
         $('#btnPanel').classList.toggle('hidden', !m.local);
         fillSelect($('.ctl[data-k=ctcss] select'), m.ctcss.map((v, i) => [i, v.toFixed(1)]));
@@ -531,12 +535,20 @@ window.addEventListener('resize', sizeCanvases);
 // ------------------------------------------------------------------ звук приёма
 async function ensureAudioContext() {
   if (C.ac) { if (C.ac.state === 'suspended') await C.ac.resume(); return C.ac; }
-  const ac = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+  const AC = window.AudioContext || window.webkitAudioContext;
+  let ac;
+  try { ac = new AC({ latencyHint: 'interactive', sampleRate: 48000 }); }   // 48 кГц — как у трансивера
+  catch { ac = new AC({ latencyHint: 'interactive' }); }
   await ac.audioWorklet.addModule('worklets.js');
   C.ac = ac;
   C.player = new AudioWorkletNode(ac, 'rx-player', { outputChannelCount: [2] });
   C.player.connect(ac.destination);
-  C.player.port.postMessage({ rate: C.rate });
+  C.player.port.postMessage({ rate: C.rate || 16000 });
+  C.player.port.onmessage = e => {
+    const s = e.data.stat; if (!s) return;
+    $('#audioStat').textContent = `Приём: ${C.rate / 1000} кГц, звуковая карта ${ac.sampleRate / 1000} кГц, буфер ${s.ms} мс, ` +
+      `пропусков ${s.under}, подстройка ${((s.adj - 1) * 100).toFixed(2)} %`;
+  };
   C.player.port.postMessage({ gain: C.gain });
   return ac;
 }
@@ -572,7 +584,7 @@ async function startMic() {
   } catch (e) { toast('Нет доступа к микрофону: ' + e.message, 5000); return false; }
   const src = ac.createMediaStreamSource(C.micStream);
   const hp = new BiquadFilterNode(ac, { type: 'highpass', frequency: 120 });
-  const lp = new BiquadFilterNode(ac, { type: 'lowpass', frequency: C.rate === 8000 ? 3200 : 3600, Q: 0.7 });
+  const lp = new BiquadFilterNode(ac, { type: 'lowpass', frequency: C.rate === 8000 ? 3200 : 3800, Q: 0.7 });
   C.micGainNode = new GainNode(ac, { gain: opts.micGain / 100 });
   C.micNode = new AudioWorkletNode(ac, 'mic-capture');
   C.micNode.port.postMessage({ rate: C.rate });
