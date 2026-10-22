@@ -832,6 +832,36 @@ async def amain(args):
             pass
 
 
+def selftest(path):
+    """Проверка собранного exe: все библиотеки и файлы пульта на месте."""
+    rep, ok = [], True
+    for mod in ('numpy', 'serial', 'serial.tools.list_ports', 'sounddevice', 'cryptography', 'pystray', 'PIL'):
+        try:
+            __import__(mod)
+            rep.append('OK   import ' + mod)
+        except Exception as e:
+            ok = False
+            rep.append('FAIL import %s: %s' % (mod, e))
+    try:
+        rep.append('OK   audio devices: %d' % len(list_audio()))
+    except Exception as e:
+        ok = False
+        rep.append('FAIL audio: %s' % e)
+    for f in ('index.html', 'app.js', 'app.css', 'worklets.js', 'panel.html', 'panel.js', 'qrcode.js',
+              'manifest.webmanifest', 'sw.js', 'icon-192.png'):
+        p = os.path.join(web_dir(), f)
+        good = os.path.isfile(p)
+        ok &= good
+        rep.append(('OK   ' if good else 'FAIL ') + 'web/' + f)
+    good = os.path.isfile(os.path.join(RES, 'menu_ftx1.json'))
+    ok &= good
+    rep.append(('OK   ' if good else 'FAIL ') + 'menu_ftx1.json')
+    rep.append('RESULT ' + ('OK' if ok else 'FAIL'))
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(rep) + '\n')
+    sys.exit(0 if ok else 1)
+
+
 def main():
     ap = argparse.ArgumentParser(description="FTX-1 Пульт — удалённое управление Yaesu FTX-1")
     ap.add_argument('--sim', action='store_true', help='симулятор трансивера')
@@ -839,7 +869,11 @@ def main():
     ap.add_argument('--background', action='store_true', help='без окна (автозапуск)')
     ap.add_argument('--console', action='store_true', help='журнал в консоль')
     ap.add_argument('-v', '--verbose', action='store_true')
+    ap.add_argument('--selftest', metavar='FILE', help='проверить состав сборки и записать отчёт в FILE')
     args = ap.parse_args()
+    if args.selftest:
+        selftest(args.selftest)
+        return
 
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if args.verbose else logging.INFO)

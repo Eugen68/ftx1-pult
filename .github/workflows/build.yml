@@ -23,6 +23,27 @@ jobs:
           pyinstaller --noconfirm --clean --onefile --windowed --name FTX1-Pult
           --icon web\icon.ico --add-data "web;web" --add-data "server\menu_ftx1.json;."
           --hidden-import pystray._win32 --paths server server\main.py
+      - name: Самопроверка exe (библиотеки и файлы)
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\FTX1-Pult.exe -ArgumentList '--selftest','selftest.txt' -Wait -PassThru
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - name: Проверка запуска сервера (симулятор)
+        shell: pwsh
+        run: |
+          '{"open_panel": false, "auto_connect": true}' | Set-Content dist\config.json
+          $p = Start-Process dist\FTX1-Pult.exe -ArgumentList '--sim','--background' -PassThru
+          Start-Sleep -Seconds 12
+          $ping = (Invoke-WebRequest http://127.0.0.1:8080/api/ping -UseBasicParsing).Content
+          $panel = (Invoke-WebRequest http://127.0.0.1:8080/panel.html -UseBasicParsing).StatusCode
+          $pult = (Invoke-WebRequest http://127.0.0.1:8080/ -UseBasicParsing).StatusCode
+          "ping: $ping  panel: $panel  pult: $pult"
+          Get-Content dist\ftx1-pult.log
+          Stop-Process -Id $p.Id -Force
+          Remove-Item dist\config.json, dist\cert.pem, dist\key.pem, dist\ftx1-pult.log -ErrorAction SilentlyContinue
+          if (-not $ping.StartsWith('FTX1') -or $panel -ne 200 -or $pult -ne 200) { exit 1 }
+          if (Select-String -Path selftest.txt -Pattern 'FAIL' -Quiet) { exit 1 }
       - uses: actions/upload-artifact@v4
         with:
           name: FTX1-Pult
