@@ -112,6 +112,9 @@ body.txon .meter#mS, body.txon .meter.scale-row { display: none; }
 #spec { top: 0; height: 28%; }
 #wf { top: 28%; height: 72%; image-rendering: pixelated; }
 #overlay { top: 0; height: 100%; pointer-events: none; }
+.wf-msg { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 20px;
+  color: #ffb4b4; font-size: 14px; background: rgba(0,0,0,.55); pointer-events: none; }
+.wf-msg b { display: block; color: #fff; font-size: 16px; margin-bottom: 6px; }
 .wf-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff8; pointer-events: none; display: none; }
 .wf-cursor::after { content: attr(data-f); position: absolute; top: 4px; left: 4px; font: 11px var(--mono); color: #fff; background: #000a; padding: 1px 4px; border-radius: 3px; white-space: nowrap; }
 

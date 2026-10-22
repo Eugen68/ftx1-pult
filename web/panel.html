@@ -109,7 +109,9 @@
         <div class="row"><select id="cat_port"></select><button class="btn" id="btnRefresh" title="Обновить список">↻</button><button class="btn" id="btnDetect" title="Подобрать автоматически">Найти</button></div></label>
       <label class="field"><span>Скорость CAT (как в меню трансивера CAT RATE)</span>
         <select id="cat_baud"><option>4800</option><option>9600</option><option>19200</option><option>38400</option><option>115200</option></select></label>
-      <label class="field"><span>Звук трансивера (USB Audio CODEC)</span><select id="audio_sel"></select></label>
+      <label class="field"><span>Звук С трансивера — приём, водопад (обычно «Микрофон (USB Audio …)»)</span><select id="audio_in"></select></label>
+      <label class="field"><span>Звук НА трансивер — передача (обычно «Динамики (USB Audio …)»)</span><select id="audio_out"></select></label>
+      <div class="hint" id="audioHint"></div>
       <label class="field"><span>Как включать передачу (PTT)</span>
         <select id="ptt_method">
           <option value="TX1">Командой CAT TX1 (рекомендуется)</option>

@@ -138,46 +138,115 @@ def list_devices(refresh=False):
     return res
 
 
-def find_device(name_part, kind, api_pref=''):
-    """Ищем USB-кодек трансивера по части имени (по умолчанию 'USB Audio CODEC').
-    Предпочитаем выбранный API, иначе MME/WASAPI на Windows."""
+import re as _re
+
+# Имена, под которыми Windows показывает USB-звук трансивера
+CODEC_HINTS = ('usb audio codec', 'usb audio device')
+
+
+def core_name(name):
+    """«Микрофон (4- USB Audio Device)» -> «usb audio device»: общая часть имени входа и выхода."""
+    m = _re.search(r'\(([^()]*)\)?\s*$', name)
+    core = m.group(1) if m and m.group(1) else name
+    core = _re.sub(r'^\s*\d+\s*-\s*', '', core)          # «4- » — номер экземпляра
+    return core.strip().lower()
+
+
+def _api_prio(api, api_pref):
+    return 0 if api_pref and api == api_pref else {'MME': 1, 'Windows WASAPI': 2, 'Windows DirectSound': 3}.get(api, 4)
+
+
+def find_device(name, kind, api_pref=''):
+    """Ищем устройство по имени: точное совпадение -> часть имени -> общая часть («USB Audio Device»).
+    MME обрезает имена до 31 символа, поэтому сравниваем и по началу."""
     import sounddevice as sd
+    if not name:
+        return None
     key = 'max_input_channels' if kind == 'in' else 'max_output_channels'
+    want, want_core = name.lower(), core_name(name)
     cands = []
     for i, d in enumerate(sd.query_devices()):
-        if d[key] > 0 and name_part.lower() in d['name'].lower():
-            api = sd.query_hostapis(d['hostapi'])['name']
-            prio = 0 if api == api_pref else {'MME': 1, 'Windows WASAPI': 2, 'Windows DirectSound': 3}.get(api, 4)
-            cands.append((prio, i))
-    if not cands:
-        return None
-    return sorted(cands)[0][1]
+        if d[key] <= 0:
+            continue
+        dn = d['name'].lower()
+        api = sd.query_hostapis(d['hostapi'])['name']
+        if dn == want:
+            score = 0
+        elif want.startswith(dn) or dn.startswith(want) or want in dn:
+            score = 1
+        elif want_core and core_name(d['name']) == want_core:
+            score = 2
+        elif want_core and want_core in dn:
+            score = 3
+        else:
+            continue
+        cands.append((score, _api_prio(api, api_pref), i))
+    return sorted(cands)[0][2] if cands else None
+
+
+def guess_codec(devices):
+    """Подбор входа и выхода трансивера из списка list_devices()."""
+    def pick(kind):
+        best = None
+        for d in devices:
+            if d[kind] <= 0:
+                continue
+            n = d['name'].lower()
+            hint = next((k for k, h in enumerate(CODEC_HINTS) if h in n), None)
+            if hint is None:
+                continue
+            rank = (hint, _api_prio(d['api'], ''), d['index'])
+            if best is None or rank < best[0]:
+                best = (rank, d)
+        return best[1] if best else None
+    di, do = pick('in'), pick('out')
+    if di and do:        # выход — той же пары, что и вход
+        same = [d for d in devices if d['out'] > 0 and core_name(d['name']) == core_name(di['name'])
+                and d['api'] == di['api']]
+        if same:
+            do = same[0]
+    return di, do
 
 
 class SoundDeviceAudio:
     """Реальный USB-звук через PortAudio (sounddevice)."""
 
-    def __init__(self, dev_name='USB Audio CODEC', in_dev=None, out_dev=None, tx_gain=1.0, api=''):
-        self.dev_name = dev_name
-        self.api = api
+    def __init__(self, in_name='', out_name='', api='', in_dev=None, out_dev=None, tx_gain=1.0):
+        self.in_name, self.out_name, self.api = in_name, out_name, api
         self.in_dev, self.out_dev = in_dev, out_dev
         self.tx = TxBuffer()
         self.tx_gain = tx_gain
         self.on_rx = None
         self.streams = []
         self.rx_level = 0.0
+        self.names = ('', '')
 
     def start(self, on_rx):
         import sounddevice as sd
         self.on_rx = on_rx
-        ind = self.in_dev if self.in_dev is not None else find_device(self.dev_name, 'in', self.api)
-        outd = self.out_dev if self.out_dev is not None else find_device(self.dev_name, 'out', self.api)
+        devs = list_devices()
+        gi, go = guess_codec(devs)
+        ind = self.in_dev if self.in_dev is not None else find_device(self.in_name, 'in', self.api)
+        if ind is None and not self.in_name and gi:
+            ind = gi['index']
+        outd = self.out_dev if self.out_dev is not None else find_device(self.out_name, 'out', self.api)
+        if outd is None and ind is not None:      # выход не задан/не найден — ищем пару к входу
+            outd = find_device(core_name(sd.query_devices(ind)['name']), 'out',
+                               sd.query_hostapis(sd.query_devices(ind)['hostapi'])['name'])
+        if outd is None and not self.out_name and go:
+            outd = go['index']
         if ind is None or outd is None:
-            raise RuntimeError("Не найдено звуковое устройство «%s». Доступные:\n%s" % (
-                self.dev_name, "\n".join("  [%d] %s (%s) in=%d out=%d" % (
-                    d['index'], d['name'], d['api'], d['in'], d['out']) for d in list_devices())))
-        log.info("Звук: вход [%s] %s, выход [%s] %s", ind, sd.query_devices(ind)['name'],
-                 outd, sd.query_devices(outd)['name'])
+            what = []
+            if ind is None:
+                what.append("вход «%s»" % (self.in_name or 'USB Audio CODEC/Device'))
+            if outd is None:
+                what.append("выход «%s»" % (self.out_name or 'пара к входу'))
+            for d in devs:
+                log.info("  звук [%d] %s (%s) in=%d out=%d", d['index'], d['name'], d['api'], d['in'], d['out'])
+            raise RuntimeError("Не найден %s. Выберите устройства трансивера в панели управления "
+                               "(список всех устройств — в журнале)." % ' и '.join(what))
+        self.names = (sd.query_devices(ind)['name'], sd.query_devices(outd)['name'])
+        log.info("Звук: приём с [%s] %s, передача на [%s] %s", ind, self.names[0], outd, self.names[1])
 
         def in_cb(indata, frames, t, status):
             x = indata[:, 0].astype(np.float32)

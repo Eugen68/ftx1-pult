@@ -41,7 +41,7 @@ from cat import Rig, SerialTransport, SerialPtt, CTCSS  # noqa: E402
 from audio import SR, Decimator, Interpolator, Waterfall  # noqa: E402
 from webserver import WebServer  # noqa: E402
 
-VERSION = "1.1"
+VERSION = "1.2"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -52,7 +52,8 @@ DEFAULT_CFG = {
     "ptt_method": "TX1",
     "ptt_port": "",
     "ptt_line": "RTS",
-    "audio_device": "USB Audio CODEC",
+    "audio_in_name": "",
+    "audio_out_name": "",
     "audio_api": "",
     "audio_in_index": None,
     "audio_out_index": None,
@@ -77,6 +78,10 @@ def load_cfg():
     try:
         with open(cfg_path(), encoding='utf-8') as f:
             cfg.update(json.load(f))
+        # настройки версии 1.1: одно поле на вход и выход
+        old = cfg.pop('audio_device', None)
+        if old and not cfg.get('audio_in_name') and old != 'USB Audio CODEC':
+            cfg['audio_in_name'] = old
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -240,12 +245,10 @@ def detect(ports, audio):
         out['cat_port'] = [p for p in ports if p['cp210x']][0]['device']
     if std:
         out['ptt_port'] = std[0]['device']
-    codec = [d for d in audio if 'usb audio codec' in d['name'].lower() and d['in'] > 0]
-    if codec:
-        mme = [d for d in codec if d['api'] == 'MME']
-        d = (mme or codec)[0]
-        out['audio_device'] = d['name']
-        out['audio_api'] = d['api']
+    from audio import guess_codec
+    di, do = guess_codec(audio)
+    if di and do:
+        out['audio_in_name'], out['audio_out_name'], out['audio_api'] = di['name'], do['name'], di['api']
     return out
 
 
@@ -318,8 +321,8 @@ class Station:
                     raise RuntimeError("Не выбран COM-порт трансивера")
                 from audio import SoundDeviceAudio
                 transport = SerialTransport(cfg['cat_port'], int(cfg['cat_baud']))
-                audio = SoundDeviceAudio(cfg['audio_device'] or 'USB Audio CODEC', cfg.get('audio_in_index'),
-                                         cfg.get('audio_out_index'), api=cfg.get('audio_api', ''))
+                audio = SoundDeviceAudio(cfg.get('audio_in_name', ''), cfg.get('audio_out_name', ''),
+                                         cfg.get('audio_api', ''), cfg.get('audio_in_index'), cfg.get('audio_out_index'))
                 if cfg['ptt_method'] in ('RTS', 'DTR') and cfg.get('ptt_port'):
                     serial_ptt = SerialPtt(cfg['ptt_port'], cfg['ptt_method'])
                 log.info("Подключаюсь к трансиверу: %s, %s бод", cfg['cat_port'], cfg['cat_baud'])
@@ -366,6 +369,7 @@ class Station:
         self.running = False
         log.info("Связь с трансивером остановлена")
         self.broadcast({'t': 'state', 's': {'connected': False}})
+        self.broadcast({'t': 'audio_status', 'err': 'Связь с трансивером остановлена'})
         self.push_status()
 
     def _rx_from_thread(self, x):
@@ -399,6 +403,7 @@ class Station:
     def _broadcast_hello_state(self):
         if self.rig:
             self.broadcast({'t': 'state', 's': self.rig.state, 'full': True})
+        self.broadcast({'t': 'audio_status', 'err': self.audio_err})
 
     def broadcast(self, obj):
         for c in self.clients:
@@ -485,6 +490,7 @@ class Station:
             'freq': st.get('freq_a'), 'mode': st.get('mode'), 'radio_id': st.get('radio_id'),
             'fw': st.get('fw0'), 'head': st.get('pwr_head'),
             'audio_ok': self.running and not self.audio_err, 'audio_err': self.audio_err,
+            'audio_names': list(getattr(self.audio, 'names', ('', ''))) if self.audio else ['', ''],
             'error': self.last_error,
             'clients': [{'name': c.name, 'local': c.local, 'audio': c.audio, 'tx': c is self.ptt_owner}
                         for c in self.clients if c.authed and not c.admin],
@@ -519,7 +525,7 @@ class Station:
                             'detect': detect(self.ports_cache, self.audio_cache), 'urls': self.urls()})
         elif t == 'admin_save':
             new = {k: v for k, v in (m.get('cfg') or {}).items() if k in DEFAULT_CFG}
-            radio_keys = ('cat_port', 'cat_baud', 'ptt_method', 'ptt_port', 'audio_device', 'audio_api',
+            radio_keys = ('cat_port', 'cat_baud', 'ptt_method', 'ptt_port', 'audio_in_name', 'audio_out_name', 'audio_api',
                           'audio_in_index', 'audio_out_index', 'simulate')
             need_restart = self.running and any(new.get(k, self.cfg.get(k)) != self.cfg.get(k) for k in radio_keys)
             port_change = any(new.get(k, self.cfg.get(k)) != self.cfg.get(k) for k in ('http_port', 'https_port'))
@@ -612,6 +618,7 @@ class Station:
                                 'audio_err': self.audio_err, 'ctcss': CTCSS, 'running': self.running,
                                 'max_tx': self.cfg['max_tx_seconds'], 'ptt_method': self.cfg['ptt_method']})
                 c.ws.send_json({'t': 'state', 's': self.rig.state if self.rig else {'connected': False}, 'full': True})
+                c.ws.send_json({'t': 'audio_status', 'err': self.audio_err if self.running else 'Связь с трансивером остановлена'})
                 if not self.running:
                     c.ws.send_json({'t': 'note', 'msg': 'Сервер запущен, но связь с трансивером остановлена — нажмите «Запустить» в панели управления'})
                 self._ptt_info()

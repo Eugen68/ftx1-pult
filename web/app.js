@@ -97,7 +97,7 @@ function connect() {
         $('#btnPanel').classList.toggle('hidden', !m.local);
         fillSelect($('.ctl[data-k=ctcss] select'), m.ctcss.map((v, i) => [i, v.toFixed(1)]));
         $('#srvInfo').textContent = `Сервер v${m.version}. PTT: ${m.ptt_method}. Ограничение передачи: ${m.max_tx} с.` + (m.audio_err ? ` ЗВУК: ${m.audio_err}` : '');
-        if (m.audio_err) toast('Сервер не нашёл USB-звук трансивера — смотрите вкладку «Настройки»', 6000);
+        setWfMsg(m.audio_err);
         send({ t: 'wf', on: true, max: C.wfMax });
         if (C.audioOn) send({ t: 'audio', on: true, rate: C.rate });
         break;
@@ -111,6 +111,7 @@ function connect() {
         if (!C.txOwner) C.txStart = 0;
         updatePtt(); break;
       case 'note': toast(m.msg, 4000); break;
+      case 'audio_status': setWfMsg(m.err); break;
       case 'raw': catLine(m.line); break;
       case 'menu_list': buildMenu(m.items); break;
       case 'menu_val': setMenuVal(m.ex, m.v); break;
@@ -133,6 +134,12 @@ function onBinary(b) {
   }
 }
 
+function setWfMsg(err) {
+  const el = $('#wfMsg');
+  el.classList.toggle('hidden', !err);
+  if (err) el.innerHTML = `<div><b>Нет звука с трансивера</b>${err.replace(/[&<]/g, c => c === '&' ? '&amp;' : '&lt;')}` +
+    (C.local ? '<br><br>Выберите устройства в панели управления сервером (кнопка ⚙ вверху).' : '') + '</div>';
+}
 function setLink(ok, text) {
   $('#linkDot').className = 'dot ' + (ok ? 'ok' : 'bad');
   if (text) $('#rigInfo').textContent = text;
@@ -172,7 +179,7 @@ function renderBadges() {
   $('#btnLock').classList.toggle('on', !!S.lock);
   $$('#modes .btn').forEach(b => b.classList.toggle('on', b.dataset.m === S.mode));
   const bd = bandOf(S.freq_a || 0);
-  $$('#bands .btn').forEach(b => b.classList.toggle('on', bd && b.dataset.b === bd[0]));
+  $$('#bands .btn').forEach(b => b.classList.toggle('on', !!bd && b.dataset.b === bd[0]));
   if (S.power != null) $('#pwrInfo').textContent = `${S.power} Вт`;
 }
 
@@ -541,7 +548,7 @@ $('#btnAudio').onclick = async () => {
   C.player.port.postMessage({ reset: true });
   send({ t: 'audio', on: C.audioOn, rate: C.rate });
   $('#btnAudio').textContent = C.audioOn ? '🔊 Звук' : '🔇 Звук';
-  $('#btnAudio').classList.toggle('on', C.audioOn);
+  $('#btnAudio').classList.toggle('on', !!C.audioOn);
   store.set('audioOn', C.audioOn);
 };
 $('#volume').value = C.gain * 100;
@@ -606,8 +613,8 @@ function pttUp() {
 function updatePtt() {
   const b = $('#ptt');
   b.classList.toggle('ready', !!C.micStream);
-  b.classList.toggle('active', C.pttPressed && C.txOwner);
-  b.classList.toggle('busy', C.pttBusy);
+  b.classList.toggle('active', !!(C.pttPressed && C.txOwner));
+  b.classList.toggle('busy', !!C.pttBusy);
   $('#pttState').textContent = C.pttBusy ? 'Передаёт другой клиент'
     : C.pttPressed ? (C.txOwner ? 'ПЕРЕДАЧА' : 'Включаю…')
       : C.micStream ? 'Микрофон готов' : 'Микрофон — по PTT';
