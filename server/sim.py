@@ -1,0 +1,169 @@
+"""
+Симулятор FTX-1: отвечает на CAT-команды как трансивер и выдаёт «эфир»
+(шум + несколько сигналов) вместо USB-звука. Нужен, чтобы проверить
+пульт без трансивера:  python main.py --sim
+"""
+import threading
+import time
+import re
+import numpy as np
+
+from audio import SR, BLOCK, TxBuffer
+
+
+class SimRadio:
+    def __init__(self):
+        self.s = {
+            'FA': '014074000', 'FB': '007100000', 'MD0': '2', 'MD1': '1', 'TX': '0',
+            'AG0': '128', 'RG0': '255', 'SQ0': '000', 'PC': '2050', 'MG': '050', 'VX': '0',
+            'VG': '050', 'VD': '10', 'NL0': '000', 'RL0': '00', 'BC0': '0', 'BP00': '000',
+            'BP01': '100', 'CO00': '0000', 'CO01': '1000', 'CO02': '0000', 'CO03': '0025',
+            'IS0': '0+0000', 'SH0': '012', 'GT0': '2', 'PA0': '1', 'PA1': '0', 'PA2': '0',
+            'RA0': '0', 'NA0': '0', 'FT': '0', 'VS': '0', 'FR': '00', 'PR0': '1', 'PL': '050',
+            'ML0': '000', 'ML1': '050', 'KS': '020', 'BI': '0', 'KP': '30', 'KR': '1', 'SD': '05',
+            'CF000': '00000', 'CF001': '+0000', 'LK': '0', 'AC': '000', 'CT0': '0', 'CN00': '012',
+            'CN01': '000', 'OS0': '0', 'TS': '0', 'AO': '050', 'AI': '0', 'MS': '00', 'DA': '10',
+        }
+        self.menu = {}
+        self.tx_level = 0.0
+        self.t0 = time.time()
+
+    def freq(self):
+        return int(self.s['FA'])
+
+    def handle(self, cmd):
+        """Одна команда без ';' -> ответ (строка с ';') или ''."""
+        if cmd == 'ID':
+            return 'ID0840;'
+        if cmd == 'VE0':
+            return 'VE01.10;'
+        if cmd == 'VE4':
+            return 'VE41.02;'
+        if cmd in ('SM0', 'SM1'):
+            v = 0 if self.s['TX'] != '0' else int(60 + 40 * np.sin(time.time() / 3) + np.random.randint(0, 12))
+            return '%s%03d;' % (cmd, max(0, v))
+        m = re.match(r'^RM(\d)$', cmd)
+        if m:
+            n = int(m.group(1))
+            tx = self.s['TX'] != '0'
+            pw = int(self.s['PC'][1:]) if self.s['PC'][0] == '2' else 10
+            v = {5: int(min(255, self.tx_level * 900 * pw / 50)) if tx else 0,
+                 6: 30 if tx else 0, 4: int(min(255, self.tx_level * 300)) if tx else 0,
+                 3: int(min(255, self.tx_level * 400)) if tx else 0, 8: 196, 7: 120 if tx else 20}.get(n, 0)
+            return 'RM%d%03d000;' % (n, v)
+        m = re.match(r'^EX(\d{6})(.*)$', cmd)
+        if m:
+            ex, val = m.groups()
+            if val:
+                self.menu[ex] = val
+                return ''
+            return 'EX%s%s;' % (ex, self.menu.get(ex, '0'))
+        acts = {'AB': lambda: self.s.update(FB=self.s['FA']), 'BA': lambda: self.s.update(FA=self.s['FB']),
+                'SV': lambda: self.s.update(FA=self.s['FB'], FB=self.s['FA']),
+                'UP': lambda: self.s.update(FA='%09d' % (self.freq() + 100)),
+                'DN': lambda: self.s.update(FA='%09d' % (self.freq() - 100))}
+        if cmd in acts:
+            acts[cmd]()
+            return ''
+        if cmd.startswith('BS0'):
+            bands = [1840000, 3650000, 5357000, 7074000, 10136000, 14074000, 18100000, 21074000,
+                     24915000, 28074000, 50313000, 70200000, 118100000, 145500000, 433500000]
+            i = int(cmd[3:5])
+            if i < len(bands):
+                self.s['FA'] = '%09d' % bands[i]
+            return ''
+        if cmd in ('BU0', 'BD0', 'ZI0', 'QI', 'QR') or cmd.startswith(('KY', 'KM', 'PB', 'CS', 'SC', 'VM', 'MC', 'PS')):
+            return ''
+        # чтение: ключ целиком совпадает
+        if cmd in self.s:
+            return cmd + self.s[cmd] + ';'
+        # запись: самый длинный подходящий ключ
+        for k in sorted(self.s, key=len, reverse=True):
+            if cmd.startswith(k) and len(cmd) > len(k):
+                v = cmd[len(k):]
+                if k == 'TX':
+                    v = '0' if v == '0' else '1'
+                if k == 'PC' and v[0] == '2':
+                    v = '2%03d' % max(5, min(100, int(float(v[1:]))))
+                self.s[k] = v
+                if k == 'AC' and v.endswith('3'):
+                    threading.Timer(2.5, lambda: self.s.update(AC='000')).start()
+                return ''
+        return '?;'
+
+
+class SimTransport:
+    def __init__(self, radio):
+        self.radio = radio
+        self.buf = ''
+        self.on_bytes = None
+        self.failed = False
+
+    def open(self, on_bytes):
+        self.on_bytes = on_bytes
+
+    def write(self, data):
+        self.buf += data.decode()
+        while ';' in self.buf:
+            cmd, self.buf = self.buf.split(';', 1)
+            ans = self.radio.handle(cmd)
+            if ans:
+                threading.Timer(0.004, self.on_bytes, args=(ans.encode(),)).start()
+
+    def close(self):
+        pass
+
+
+class SimAudio:
+    """«Эфир»: шум + CW + FT8-подобные тоны + SSB-подобный сигнал."""
+
+    def __init__(self, radio):
+        self.radio = radio
+        self.tx = TxBuffer()
+        self.tx_gain = 1.0
+        self.rx_level = 0.0
+        self.n = 0
+        self._stop = False
+
+    def start(self, on_rx):
+        def run():
+            next_t = time.monotonic()
+            while not self._stop:
+                x = self._block()
+                self.rx_level = float(np.sqrt(np.mean(x * x)))
+                on_rx(x)
+                y = self.tx.pull(BLOCK)
+                self.radio.tx_level = float(np.sqrt(np.mean(y * y)))
+                next_t += BLOCK / SR
+                time.sleep(max(0, next_t - time.monotonic()))
+        threading.Thread(target=run, daemon=True).start()
+
+    def stop(self):
+        self._stop = True
+
+    def _block(self):
+        t = (self.n + np.arange(BLOCK)) / SR
+        self.n += BLOCK
+        x = np.random.randn(BLOCK).astype(np.float32) * 0.003
+        if self.radio.s['TX'] != '0':
+            return x * 0.1
+        f0 = self.radio.freq()
+        # «станции» на фиксированных частотах эфира: слышны, если попадают в полосу 0..3 кГц
+        stations = [(14075300, 0.02, 'cw'), (14076150, 0.01, 'ft8'), (14074800, 0.008, 'ft8'),
+                    (14075700, 0.012, 'ft8'), (7072500, 0.03, 'cw'), (14077100, 0.015, 'ssb')]
+        for fs, a, kind in stations:
+            af = fs - f0
+            if not (80 < af < 4000):
+                continue
+            if kind == 'cw':
+                keyed = (np.floor(t * 8) % 5 < 3) & (np.floor(t * 0.5) % 2 == 0)
+                x += a * keyed * np.sin(2 * np.pi * af * t)
+            elif kind == 'ft8':
+                sym = np.floor(t / 0.16) % 8
+                on = (t % 15) < 12.6
+                x += a * on * np.sin(2 * np.pi * (af + sym * 6.25) * t)
+            else:
+                env = 0.5 + 0.5 * np.sin(2 * np.pi * 3 * t)
+                for k in range(6):
+                    x += a * env * np.sin(2 * np.pi * (af - 2400 + 300 + k * 330 + 40 * np.sin(t)) * t) / 3
+        return x.astype(np.float32)

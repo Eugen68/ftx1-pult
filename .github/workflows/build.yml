@@ -1,0 +1,30 @@
+# Автоматическая сборка FTX1-Pult.exe на серверах GitHub.
+# Загрузите проект в свой репозиторий GitHub → вкладка Actions → «Build FTX1-Pult.exe» → Run workflow.
+# Готовый exe — в разделе Artifacts у завершённой сборки.
+name: Build FTX1-Pult.exe
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt pyinstaller
+      - run: >
+          pyinstaller --noconfirm --clean --onefile --windowed --name FTX1-Pult
+          --icon web\icon.ico --add-data "web;web" --add-data "server\menu_ftx1.json;."
+          --hidden-import pystray._win32 --paths server server\main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FTX1-Pult
+          path: dist/FTX1-Pult.exe
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/FTX1-Pult.exe

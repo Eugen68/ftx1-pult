@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.spec
+config.json
+cert.pem
+key.pem
+ftx1-pult.log*

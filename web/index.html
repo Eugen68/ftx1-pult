@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0d1117">
+<meta name="mobile-web-app-capable" content="yes">
+<title>FTX-1 Пульт</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- Вход -->
+<div id="login" class="overlay hidden">
+  <div class="dialog">
+    <h2>FTX-1 Пульт</h2>
+    <p id="loginMsg" class="muted">Введите пароль сервера</p>
+    <input id="loginPw" type="password" autocomplete="current-password" placeholder="Пароль">
+    <button id="loginBtn" class="btn primary wide">Войти</button>
+  </div>
+</div>
+
+<header class="topbar">
+  <div class="brand"><span class="dot" id="linkDot"></span><b>FTX-1</b><span id="rigInfo" class="muted small">нет связи</span></div>
+  <div class="top-actions">
+    <button id="btnAudio" class="btn chip" title="Звук приёмника на этом устройстве">🔇 Звук</button>
+    <label class="vol" title="Громкость на этом устройстве"><input id="volume" type="range" min="0" max="200" value="100"></label>
+    <button id="btnPanel" class="btn chip icon hidden" title="Панель управления сервером">⚙</button>
+    <button id="btnFull" class="btn chip icon" title="Во весь экран">⛶</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ===== Дисплей трансивера ===== -->
+  <section class="panel display" id="display">
+    <div class="vfo-row">
+      <div class="badges">
+        <span class="badge" id="bVfo">VFO-A</span>
+        <span class="badge mode" id="bMode">—</span>
+        <span class="badge off" id="bSplit">SPLIT</span>
+        <span class="badge off" id="bClar">CLAR</span>
+        <span class="badge off" id="bLock">LOCK</span>
+        <span class="badge tx off" id="bTx">TX</span>
+      </div>
+      <div class="freq" id="freqA" title="Колесо или клик по верхней/нижней половине цифры — изменить разряд"></div>
+      <div class="sub-row">
+        <span class="muted">B:</span> <span id="freqB" class="freq-b">—</span> <span class="badge small-b" id="bModeB">—</span>
+        <span class="spacer"></span>
+        <span class="muted small" id="pwrInfo"></span>
+      </div>
+    </div>
+    <div class="meters">
+      <div class="meter" id="mS"><label>S</label><div class="bar"><i></i></div><span class="val"></span></div>
+      <div class="meter scale-row"><label></label><div class="scale"><span>1</span><span>3</span><span>5</span><span>7</span><span>9</span><span>+20</span><span>+40</span><span>+60</span></div><span></span></div>
+      <div class="meter tx" id="mPo"><label>PO</label><div class="bar"><i></i></div><span class="val"></span></div>
+      <div class="meter tx" id="mSwr"><label>SWR</label><div class="bar"><i></i></div><span class="val"></span></div>
+      <div class="meter tx" id="mAlc"><label>ALC</label><div class="bar"><i></i></div><span class="val"></span></div>
+    </div>
+  </section>
+
+  <!-- ===== Водопад ===== -->
+  <section class="panel wfpanel">
+    <div class="wf-tools">
+      <div class="seg" id="spanSeg">
+        <button data-v="3000">3k</button><button data-v="4000" class="on">4k</button><button data-v="6000">6k</button><button data-v="12000">12k</button><button data-v="24000">24k</button>
+      </div>
+      <label class="mini">Пол<input id="wfFloor" type="range" min="0" max="200" value="70"></label>
+      <label class="mini">Конт<input id="wfRange" type="range" min="20" max="160" value="80"></label>
+      <span class="muted small" id="wfHint">Двойной клик — настроиться на сигнал</span>
+    </div>
+    <div class="wf-wrap" id="wfWrap">
+      <canvas id="spec"></canvas>
+      <canvas id="wf"></canvas>
+      <canvas id="overlay"></canvas>
+      <div class="wf-cursor" id="wfCursor"></div>
+    </div>
+  </section>
+
+  <!-- ===== Настройка частоты ===== -->
+  <section class="panel tune">
+    <div class="tune-row">
+      <button class="btn big" data-step="-1">−</button>
+      <div class="knob" id="knob" title="Тяните влево/вправо или крутите колесо"><div class="knob-dial" id="knobDial"></div></div>
+      <button class="btn big" data-step="1">+</button>
+      <select id="step">
+        <option value="1">1 Гц</option><option value="10" selected>10 Гц</option><option value="50">50 Гц</option>
+        <option value="100">100 Гц</option><option value="500">500 Гц</option><option value="1000">1 кГц</option>
+        <option value="5000">5 кГц</option><option value="9000">9 кГц</option><option value="10000">10 кГц</option>
+        <option value="12500">12.5 кГц</option><option value="25000">25 кГц</option><option value="100000">100 кГц</option>
+      </select>
+      <input id="freqInput" inputmode="decimal" placeholder="МГц, напр. 7.074" class="freq-input">
+    </div>
+    <div class="btn-grid bands" id="bands"></div>
+    <div class="btn-grid modes" id="modes"></div>
+  </section>
+
+  <!-- ===== Вкладки ===== -->
+  <section class="panel tabs-panel">
+    <nav class="tabs" id="tabs">
+      <button data-tab="rx" class="on">Приём</button>
+      <button data-tab="tx">Передача</button>
+      <button data-tab="vfo">VFO/Память</button>
+      <button data-tab="cw">CW</button>
+      <button data-tab="menu">Меню</button>
+      <button data-tab="cat">CAT</button>
+      <button data-tab="opts">Настройки</button>
+    </nav>
+
+    <div class="tab on" id="tab-rx">
+      <div class="ctl-grid">
+        <div class="ctl" data-k="af" data-min="0" data-max="255" data-label="AF трансивера"></div>
+        <div class="ctl" data-k="rf" data-min="0" data-max="255" data-label="RF усиление"></div>
+        <div class="ctl" data-k="sql" data-min="0" data-max="255" data-label="Шумодав (SQL)"></div>
+        <div class="ctl sel" data-k="agc" data-label="АРУ (AGC)" data-opts="0:OFF,1:FAST,2:MID,3:SLOW,4:AUTO"></div>
+        <div class="ctl sel" data-k="preamp" data-label="Предусилитель" data-opts="0:IPO,1:AMP1,2:AMP2"></div>
+        <div class="ctl tog" data-k="att" data-label="Аттенюатор"></div>
+        <div class="ctl" data-k="nb" data-min="0" data-max="10" data-label="NB (0 = выкл)"></div>
+        <div class="ctl" data-k="nr" data-min="0" data-max="10" data-label="DNR (0 = выкл)"></div>
+        <div class="ctl tog" data-k="dnf" data-label="DNF авто-режектор"></div>
+        <div class="ctl" data-k="width" data-min="0" data-max="23" data-label="Полоса (WIDTH)" data-fmt="width"></div>
+        <div class="ctl" data-k="ifshift" data-min="-1200" data-max="1200" data-step="20" data-label="IF SHIFT, Гц" data-reset="0"></div>
+        <div class="ctl tog" data-k="narrow" data-label="NAR (узкий)"></div>
+        <div class="ctl tog" data-k="notch" data-label="Ручной режектор"></div>
+        <div class="ctl" data-k="notch_freq" data-min="10" data-max="3200" data-step="10" data-label="Режектор, Гц"></div>
+        <div class="ctl tog" data-k="contour" data-label="CONTOUR"></div>
+        <div class="ctl" data-k="contour_freq" data-min="10" data-max="3200" data-step="10" data-label="CONTOUR, Гц"></div>
+        <div class="ctl tog" data-k="apf" data-label="APF (CW)"></div>
+        <div class="ctl" data-k="apf_freq" data-min="0" data-max="50" data-label="APF сдвиг" data-fmt="apf"></div>
+        <div class="ctl tog" data-k="clar_rx" data-label="CLAR RX (RIT)"></div>
+        <div class="ctl tog" data-k="clar_tx" data-label="CLAR TX (XIT)"></div>
+        <div class="ctl" data-k="clar" data-min="-9999" data-max="9999" data-step="10" data-label="CLAR, Гц" data-reset="0"></div>
+        <div class="ctl tog" data-k="dual" data-label="Двойной приём"></div>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-tx">
+      <div class="ctl-grid">
+        <div class="ctl" data-k="power" data-min="0.5" data-max="100" data-step="1" data-label="Мощность, Вт"></div>
+        <div class="ctl" data-k="mic" data-min="0" data-max="100" data-label="MIC GAIN"></div>
+        <div class="ctl tog" data-k="proc" data-label="Компрессор (PROC)"></div>
+        <div class="ctl" data-k="proc_level" data-min="0" data-max="100" data-label="Уровень PROC"></div>
+        <div class="ctl" data-k="amc" data-min="0" data-max="100" data-label="AMC"></div>
+        <div class="ctl tog" data-k="vox" data-label="VOX"></div>
+        <div class="ctl" data-k="vox_gain" data-min="0" data-max="100" data-label="VOX усиление"></div>
+        <div class="ctl" data-k="vox_delay" data-min="0" data-max="33" data-label="VOX задержка" data-fmt="delay"></div>
+        <div class="ctl tog" data-k="mon" data-label="Монитор"></div>
+        <div class="ctl" data-k="mon_level" data-min="0" data-max="100" data-label="Уровень монитора"></div>
+        <div class="ctl sel" data-k="tone_mode" data-label="Тон" data-opts="0:Выкл,1:CTCSS ENC,2:TSQ,3:DCS"></div>
+        <div class="ctl sel" data-k="ctcss" data-label="CTCSS, Гц" data-opts="ctcss"></div>
+        <div class="ctl sel" data-k="rpt_shift" data-label="Сдвиг репитера" data-opts="0:Симплекс,1:+,2:−"></div>
+        <div class="ctl tog" data-k="txw" data-label="TXW (слушать TX)"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn" data-act="tune">⚡ Тюнер (встр.)</button>
+        <button class="btn" data-act="tune_ext">⚡ Тюнер внешн.</button>
+        <button class="btn" data-act="tune_stop">■ Стоп</button>
+        <button class="btn" data-act="atas_tune">ATAS авто</button>
+        <button class="btn" data-act="atas_up">ATAS ▲</button>
+        <button class="btn" data-act="atas_down">ATAS ▼</button>
+        <span class="muted small" id="tuneState"></span>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-vfo">
+      <div class="btn-row">
+        <button class="btn" data-set="vfo:0">Работа на MAIN</button>
+        <button class="btn" data-set="vfo:1">Работа на SUB</button>
+        <button class="btn" data-act="a_to_b">A → B</button>
+        <button class="btn" data-act="b_to_a">B → A</button>
+        <button class="btn" data-act="swap">A ⇄ B</button>
+        <button class="btn" id="btnSplit">SPLIT (TX на B)</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn" data-act="band_down">Диапазон ◀</button>
+        <button class="btn" data-act="band_up">Диапазон ▶</button>
+        <button class="btn" data-act="scan_down">Скан ◀</button>
+        <button class="btn" data-act="scan_stop">Скан ■</button>
+        <button class="btn" data-act="scan_up">Скан ▶</button>
+        <button class="btn" data-act="zero_in">ZERO-IN</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn" data-act="vfo_mode">Режим VFO</button>
+        <button class="btn" data-act="mem_mode">Режим памяти</button>
+        <input id="memCh" type="number" min="1" max="999" value="1" class="num">
+        <button class="btn" id="btnMemCh">Вызвать канал</button>
+        <button class="btn" data-act="qmb_store">QMB запомнить</button>
+        <button class="btn" data-act="qmb_recall">QMB вызвать</button>
+        <button class="btn" id="btnLock">LOCK</button>
+      </div>
+      <div class="ctl-grid">
+        <div class="ctl sel" data-k="mode_b" data-label="Вид работы VFO-B" data-opts="modes"></div>
+        <div class="ctl" data-k="dimmer" data-min="0" data-max="20" data-label="Яркость дисплея"></div>
+      </div>
+      <h4>Мои частоты <span class="muted small">(хранятся на этом устройстве)</span></h4>
+      <div class="btn-row"><input id="favName" placeholder="Название" class="text"><button class="btn" id="favAdd">＋ Добавить текущую</button></div>
+      <div id="favList" class="fav-list"></div>
+    </div>
+
+    <div class="tab" id="tab-cw">
+      <div class="ctl-grid">
+        <div class="ctl" data-k="key_speed" data-min="4" data-max="60" data-label="Скорость, WPM"></div>
+        <div class="ctl" data-k="key_pitch" data-min="0" data-max="75" data-label="Тон CW" data-fmt="pitch"></div>
+        <div class="ctl tog" data-k="keyer" data-label="Электронный ключ"></div>
+        <div class="ctl tog" data-k="bk" data-label="BREAK-IN"></div>
+        <div class="ctl" data-k="bk_delay" data-min="0" data-max="33" data-label="Задержка BK" data-fmt="delay"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn" data-act="spot_on">SPOT вкл</button><button class="btn" data-act="spot_off">SPOT выкл</button>
+        <button class="btn" data-act="zero_in">ZERO-IN</button>
+      </div>
+      <h4>Память ключа</h4>
+      <div id="cwMems" class="cw-mems"></div>
+      <p class="muted small">Текст записывается в память трансивера (KM) и передаётся им самим (KY) — без задержек сети. Нужен включённый BREAK-IN.</p>
+    </div>
+
+    <div class="tab" id="tab-menu">
+      <div class="btn-row">
+        <input id="menuSearch" class="text grow" placeholder="Поиск по меню (например MOD_SOURCE, AGC, USB)">
+        <select id="menuGroup"></select>
+        <button class="btn" id="menuReadAll">Прочитать раздел</button>
+      </div>
+      <div class="note" id="usbAudioHelp">
+        <b>Для связи через микрофон ПК</b> в меню трансивера для нужных видов работы
+        (SSB / AM / FM / DATA) параметр <code>…_MOD_SOURCE</code> должен указывать на USB,
+        а <code>…_USB_MOD_GAIN</code> задаёт уровень звука с ПК. <code>…_USB_OUT_LEVEL</code> — громкость
+        приёма, идущая в ПК. Номера значений сверьте со страницей «MOD SOURCE» в инструкции FTX-1.
+        <button class="btn small" id="menuUsbShow">Показать эти пункты</button>
+      </div>
+      <div id="menuList" class="menu-list"></div>
+    </div>
+
+    <div class="tab" id="tab-cat">
+      <div class="btn-row">
+        <input id="catCmd" class="text grow mono" placeholder="Команда CAT, например FA; или MD02;">
+        <button class="btn" id="catSend">Отправить</button>
+        <label class="chk"><input type="checkbox" id="catLog"> журнал обмена</label>
+        <button class="btn" id="catClear">Очистить</button>
+      </div>
+      <pre id="catOut" class="console"></pre>
+    </div>
+
+    <div class="tab" id="tab-opts">
+      <div class="opts">
+        <label>Качество звука по сети
+          <select id="optRate"><option value="16000">16 кГц (ЛВС, Wi-Fi)</option><option value="8000">8 кГц (мобильный интернет)</option></select></label>
+        <label>Микрофон этого устройства <select id="optMic"><option value="">По умолчанию</option></select></label>
+        <label>Усиление микрофона, % <input id="optMicGain" type="range" min="10" max="400" value="100"><span id="optMicGainV">100</span></label>
+        <label class="chk"><input type="checkbox" id="optEcho" checked> Эхоподавление</label>
+        <label class="chk"><input type="checkbox" id="optNs" checked> Шумоподавление микрофона</label>
+        <label class="chk"><input type="checkbox" id="optAgc"> Автоусиление микрофона (AGC браузера)</label>
+        <label class="chk"><input type="checkbox" id="optMuteTx" checked> Глушить приём во время передачи</label>
+        <label>Кнопка PTT
+          <select id="optPttMode"><option value="hold">Удерживать</option><option value="toggle">Нажал — передача, ещё раз — приём</option></select></label>
+        <label class="chk"><input type="checkbox" id="optSpace" checked> Пробел = PTT (на ПК)</label>
+        <label>Палитра водопада
+          <select id="optPalette"><option value="classic">Классика</option><option value="yaesu">Синяя</option><option value="gray">Серая</option><option value="fire">Огонь</option></select></label>
+        <p class="muted small" id="srvInfo"></p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- PTT -->
+<footer class="pttbar">
+  <div class="mic-meter" title="Уровень микрофона"><i id="micLevel"></i></div>
+  <button id="ptt" class="ptt">PTT</button>
+  <div class="ptt-info"><span id="pttState" class="muted small">Микрофон — по PTT</span><span id="txTimer" class="small"></span></div>
+</footer>
+
+<div id="toast" class="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
