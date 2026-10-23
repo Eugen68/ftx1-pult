@@ -28,6 +28,7 @@
   <div class="top-actions">
     <button id="btnAudio" class="btn chip" title="Звук приёмника на этом устройстве">🔇 Звук</button>
     <label class="vol" title="Громкость на этом устройстве"><input id="volume" type="range" min="0" max="200" value="100"></label>
+    <button id="btnKeys" class="btn chip icon" title="Горячие клавиши (?)">⌨</button>
     <button id="btnPanel" class="btn chip icon hidden" title="Панель управления сервером">⚙</button>
     <button id="btnFull" class="btn chip icon" title="Во весь экран">⛶</button>
   </div>
@@ -274,10 +275,13 @@
           <select id="optScale"><option value="auto">Авто — под размер экрана</option><option value="0.8">80 %</option><option value="0.9">90 %</option><option value="1">100 %</option><option value="1.1">110 %</option><option value="1.25">125 %</option><option value="1.5">150 %</option><option value="1.75">175 %</option><option value="2">200 %</option></select></label>
         <label>Кнопка PTT
           <select id="optPttMode"><option value="hold">Удерживать</option><option value="toggle">Нажал — передача, ещё раз — приём</option></select></label>
-        <label class="chk"><input type="checkbox" id="optSpace" checked> Пробел = PTT (на ПК)</label>
         <label>Палитра водопада
           <select id="optPalette"><option value="classic">Классика</option><option value="yaesu">Синяя</option><option value="gray">Серая</option><option value="fire">Огонь</option></select></label>
         <p class="muted small" id="srvInfo"></p>
+        <h4 style="margin-top:6px">Горячие клавиши</h4>
+        <label class="chk"><input type="checkbox" id="optHotkeys" checked> Включены (справка — клавиша <kbd>?</kbd> или <kbd>F1</kbd>)</label>
+        <div id="hkList" class="hk-list"></div>
+        <div class="btn-row"><button class="btn" id="hkReset">Вернуть клавиши по умолчанию</button></div>
       </div>
     </div>
   </section>
@@ -290,6 +294,13 @@
   <div class="ptt-info"><span id="pttState" class="muted small">Микрофон — по PTT</span><span id="txTimer" class="small"></span></div>
 </footer>
 
+<div id="help" class="overlay hidden">
+  <div class="dialog help-dialog">
+    <div class="help-head"><h2>Горячие клавиши</h2><button class="btn chip icon" data-close title="Закрыть (Esc)">✕</button></div>
+    <div id="helpBody" class="help-body"></div>
+    <div class="btn-row"><button class="btn" id="helpEdit">Изменить клавиши…</button><span class="muted small">Клавиши работают в любой раскладке (русской и английской).</span></div>
+  </div>
+</div>
 <div id="toast" class="toast"></div>
 <script src="app.js"></script>
 </body>

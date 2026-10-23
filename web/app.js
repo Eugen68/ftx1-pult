@@ -67,7 +67,7 @@ const C = {                         // состояние клиента
   span: 4000, bw: 0,                      // действующий обзор и измеренная полоса звука трансивера
 };
 const opts = Object.assign({ echo: true, ns: true, agc: false, muteTx: true, pttMode: 'hold', space: true, palette: 'classic', micGain: 100, micId: '',
-  sqMode: 'radio', sqThr: -60, tail: 500, scale: 'auto' }, store.get('opts', {}));
+  sqMode: 'radio', sqThr: -60, tail: 500, scale: 'auto', hotkeys: true }, store.get('opts', {}));
 
 // ------------------------------------------------------------------ связь
 function send(o) { if (C.ws && C.ws.readyState === 1) C.ws.send(JSON.stringify(o)); }
@@ -265,6 +265,7 @@ $$('[data-step]').forEach(b => b.addEventListener('click', () => nudge(+b.datase
 $('#step').value = store.get('step', 10);
 $('#step').addEventListener('change', () => store.set('step', stepHz()));
 $('#freqInput').addEventListener('keydown', e => {
+  if (e.key === 'Escape') { e.target.value = ''; e.target.blur(); return; }
   if (e.key !== 'Enter') return;
   let v = parseFloat(e.target.value.replace(',', '.'));
   if (!isFinite(v)) return;
@@ -370,13 +371,6 @@ const dial = (() => {
   cv.addEventListener('wheel', e => { e.preventDefault(); spinning = false; turn((e.deltaY < 0 ? 1 : -1) * STEP_A); }, { passive: false });
   return { resize, draw };
 })();
-document.addEventListener('keydown', e => {
-  if (e.target.matches('input, select, textarea')) return;
-  if (e.key === 'ArrowUp' || e.key === 'ArrowRight') { nudge(1); e.preventDefault(); }
-  if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') { nudge(-1); e.preventDefault(); }
-  if (e.key === 'PageUp') { nudge(10); e.preventDefault(); }
-  if (e.key === 'PageDown') { nudge(-10); e.preventDefault(); }
-});
 
 // ------------------------------------------------------------------ диапазоны и виды работы
 const bandMem = store.get('bandMem', {});
@@ -782,11 +776,6 @@ setInterval(() => {
   const up = () => { if (opts.pttMode === 'hold') pttUp(); };
   b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up);
   b.addEventListener('contextmenu', e => e.preventDefault());
-  document.addEventListener('keydown', e => {
-    if (!opts.space || e.code !== 'Space' || e.repeat || e.target.matches('input, select, textarea')) return;
-    e.preventDefault(); opts.pttMode === 'toggle' ? (C.pttPressed ? pttUp() : pttDown()) : pttDown();
-  });
-  document.addEventListener('keyup', e => { if (opts.space && e.code === 'Space' && opts.pttMode === 'hold') pttUp(); });
   window.addEventListener('blur', () => { if (opts.pttMode === 'hold') pttUp(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden) pttUp(); });
 })();
@@ -946,7 +935,7 @@ function initOpts() {
     $('#' + id).checked = opts[k];
     $('#' + id).onchange = e => { opts[k] = e.target.checked; saveOpts(); resetMic(); };
   }
-  for (const [id, k] of [['optMuteTx', 'muteTx'], ['optSpace', 'space']]) {
+  for (const [id, k] of [['optMuteTx', 'muteTx']]) {
     $('#' + id).checked = opts[k];
     $('#' + id).onchange = e => { opts[k] = e.target.checked; saveOpts(); };
   }
@@ -968,6 +957,192 @@ $('#btnFull').onclick = () => {
   else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen().catch(() => { });
 };
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => { });
+
+// ------------------------------------------------------------------ горячие клавиши
+// Клавиши привязаны к физическим кнопкам (event.code), поэтому работают в любой раскладке.
+// Любое действие можно переназначить во вкладке «Настройки». Справка — «?» или F1.
+const HOTKEYS = (() => {
+  const MODE_CYCLE = ['LSB', 'USB', 'CW-U', 'CW-L', 'AM', 'FM', 'DATA-U', 'DATA-L'];
+  const SPANS = [0, 3000, 4000, 6000, 8000, 12000, 24000];
+  const note = m => toast(m, 1300);
+  const onOff = v => v ? 'вкл' : 'выкл';
+  const toggle = (k, name) => { const v = S[k] ? 0 : 1; setParam(k, v); renderControls({ [k]: v }); renderBadges(); note(`${name}: ${onOff(v)}`); };
+  const setMode = m => { setParam('mode', m); renderBadges(); note('Вид работы: ' + m); setTimeout(rememberBand, 300); };
+  const bandIdx = () => { const f = S.freq_a || 0; const i = BANDS.findIndex(b => f >= b[1] && f <= b[2]); return i; };
+  const goBand = d => {
+    let i = bandIdx();
+    if (i < 0) { const f = S.freq_a || 0; i = d > 0 ? BANDS.findIndex(b => b[1] > f) : BANDS.map(b => b[2] < f).lastIndexOf(true); if (i < 0) return; }
+    else i = (i + d + BANDS.length) % BANDS.length;
+    $$('#bands .btn')[i].click(); note('Диапазон ' + $$('#bands .btn')[i].textContent);
+  };
+  const lvlToggle = (k, name) => {
+    const cur = S[k] | 0;
+    if (cur) { opts[k + 'Last'] = cur; saveOpts(); setParam(k, 0); note(name + ': выкл'); }
+    else { const v = opts[k + 'Last'] || 5; setParam(k, v); note(`${name}: ${v}`); }
+    renderControls({ [k]: S[k] });
+  };
+  const A = [
+    // id, группа, название, клавиши по умолчанию, действие, [отпускание], [повтор при удержании]
+    ['ptt', 'Передача', 'PTT — передача (держать)', ['Space'],
+      () => { opts.pttMode === 'toggle' ? (C.pttPressed ? pttUp() : pttDown()) : pttDown(); },
+      () => { if (opts.pttMode === 'hold') pttUp(); }],
+    ['stop', 'Передача', 'Стоп: снять передачу, остановить тюнер', ['Escape'],
+      () => { pttUp(); if (S.tuning) act('tune_stop'); }],
+    ['tuner', 'Передача', 'Тюнер: настроить', ['KeyT'], () => { act('tune'); note('Тюнер: настройка'); }],
+    ['proc', 'Передача', 'Компрессор PROC', [], () => toggle('proc', 'PROC')],
+    ['vox', 'Передача', 'VOX', [], () => toggle('vox', 'VOX')],
+    ['up', 'Частота', 'Вверх на шаг', ['ArrowUp', 'ArrowRight'], () => nudge(1), null, true],
+    ['down', 'Частота', 'Вниз на шаг', ['ArrowDown', 'ArrowLeft'], () => nudge(-1), null, true],
+    ['up10', 'Частота', 'Вверх на 10 шагов', ['PageUp', 'Shift+ArrowUp', 'Shift+ArrowRight'], () => nudge(10), null, true],
+    ['down10', 'Частота', 'Вниз на 10 шагов', ['PageDown', 'Shift+ArrowDown', 'Shift+ArrowLeft'], () => nudge(-10), null, true],
+    ['step+', 'Частота', 'Шаг крупнее', ['KeyS'], () => stepMove(1)],
+    ['step-', 'Частота', 'Шаг мельче', ['Shift+KeyS'], () => stepMove(-1)],
+    ['entry', 'Частота', 'Ввод частоты с клавиатуры', ['Enter', 'NumpadEnter'], () => { const i = $('#freqInput'); i.focus(); i.select(); }],
+    ['band+', 'Частота', 'Следующий диапазон', ['BracketRight'], () => goBand(1)],
+    ['band-', 'Частота', 'Предыдущий диапазон', ['BracketLeft'], () => goBand(-1)],
+    ['lock', 'Частота', 'Блокировка LOCK', ['KeyK'], () => toggle('lock', 'LOCK')],
+    ['mode+', 'Вид работы', 'Следующий вид работы', ['KeyM'], () => { const i = MODE_CYCLE.indexOf(S.mode); setMode(MODE_CYCLE[(i + 1) % MODE_CYCLE.length]); }],
+    ['mode-', 'Вид работы', 'Предыдущий вид работы', ['Shift+KeyM'], () => { const i = MODE_CYCLE.indexOf(S.mode); setMode(MODE_CYCLE[(i - 1 + MODE_CYCLE.length) % MODE_CYCLE.length]); }],
+    ['usb', 'Вид работы', 'USB', ['KeyU'], () => setMode('USB')],
+    ['lsb', 'Вид работы', 'LSB', ['KeyL'], () => setMode('LSB')],
+    ['cw', 'Вид работы', 'CW (повторно — CW-U ⇄ CW-L)', ['KeyC'], () => setMode(S.mode === 'CW-U' ? 'CW-L' : 'CW-U')],
+    ['am', 'Вид работы', 'AM', ['KeyA'], () => setMode('AM')],
+    ['fm', 'Вид работы', 'FM (повторно — FM ⇄ FM-N)', ['KeyF'], () => setMode(S.mode === 'FM' ? 'FM-N' : 'FM')],
+    ['data', 'Вид работы', 'DATA (повторно — DATA-U ⇄ DATA-L)', ['KeyD'], () => setMode(S.mode === 'DATA-U' ? 'DATA-L' : 'DATA-U')],
+    ['swap', 'VFO', 'A ⇄ B', ['KeyV'], () => { act('swap'); note('A ⇄ B'); }],
+    ['a2b', 'VFO', 'A → B', ['KeyB'], () => { act('a_to_b'); note('A → B'); }],
+    ['split', 'VFO', 'SPLIT', ['KeyX'], () => toggle('split', 'SPLIT')],
+    ['nb', 'Приёмник', 'Подавитель импульсных помех NB', ['KeyN'], () => lvlToggle('nb', 'NB')],
+    ['nr', 'Приёмник', 'Шумоподавление DNR', ['KeyR'], () => lvlToggle('nr', 'DNR')],
+    ['dnf', 'Приёмник', 'Авто-режектор DNF', ['KeyJ'], () => toggle('dnf', 'DNF')],
+    ['att', 'Приёмник', 'Аттенюатор ATT', ['KeyO'], () => toggle('att', 'ATT')],
+    ['preamp', 'Приёмник', 'Предусилитель IPO → AMP1 → AMP2', ['KeyP'], () => {
+      const max = bandType() ? 1 : 2, v = ((ctlValue('preamp') | 0) + 1) % (max + 1);
+      setParam('preamp', v); S['preamp' + bandType()] = v; renderControls({ preamp: v });
+      note('Предусилитель: ' + (bandType() ? onOff(v) : ['IPO', 'AMP1', 'AMP2'][v]));
+    }],
+    ['agc', 'Приёмник', 'АРУ: FAST → MID → SLOW → AUTO', ['KeyG'], () => {
+      const v = ((S.agc | 0) % 4) + 1; setParam('agc', v); renderControls({ agc: v }); note('АРУ: ' + ['OFF', 'FAST', 'MID', 'SLOW', 'AUTO'][v]);
+    }],
+    ['narrow', 'Приёмник', 'Узкий фильтр NAR', [], () => toggle('narrow', 'NAR')],
+    ['sq', 'Приёмник', 'Шумодав пульта (FM): выкл → по ТРХ → по уровню', ['KeyQ'], () => {
+      const L = ['off', 'radio', 'level']; opts.sqMode = L[(L.indexOf(opts.sqMode) + 1) % 3]; saveOpts(); renderSq(); pushGate();
+      note('Шумодав: ' + { off: 'выкл', radio: 'по трансиверу', level: 'по уровню' }[opts.sqMode] + (isFMmode(S.mode) ? '' : ' (работает только в FM)'));
+    }],
+    ['audio', 'Звук и экран', 'Звук приёма вкл/выкл', ['KeyZ'], () => $('#btnAudio').click()],
+    ['vol+', 'Звук и экран', 'Громкость +', ['Equal', 'NumpadAdd'], () => volStep(10), null, true],
+    ['vol-', 'Звук и экран', 'Громкость −', ['Minus', 'NumpadSubtract'], () => volStep(-10), null, true],
+    ['span', 'Звук и экран', 'Обзор водопада: Авто → 3k → … → 24k', ['KeyW'], () => {
+      const i = SPANS.indexOf(C.wfMax); C.wfMax = SPANS[(i + 1) % SPANS.length]; store.set('wfMax', C.wfMax); updateSpan(true);
+      note('Обзор: ' + (C.wfMax ? C.wfMax / 1000 + ' кГц' : 'авто'));
+    }],
+    ['full', 'Звук и экран', 'Во весь экран', [], () => $('#btnFull').click()],
+    ['help', 'Звук и экран', 'Справка по клавишам', ['Shift+Slash', 'F1'], () => showHelp()],
+  ];
+  for (let n = 1; n <= 5; n++) A.push(['cw' + n, 'CW', `Передать CW-память ${n}`, ['Shift+Digit' + n], () => { act('cw_play', n); note('CW-память ' + n); }]);
+  const actions = A.map(([id, group, name, def, down, up, repeat]) => ({ id, group, name, def, down, up, repeat }));
+
+  function stepMove(d) {
+    const sel = $('#step'), i = clamp(sel.selectedIndex + d, 0, sel.options.length - 1);
+    sel.selectedIndex = i; sel.dispatchEvent(new Event('change')); note('Шаг: ' + sel.options[i].text);
+  }
+  function volStep(d) {
+    const v = $('#volume'); v.value = clamp(+v.value + d, 0, 200); v.dispatchEvent(new Event('input')); note('Громкость: ' + v.value + ' %');
+  }
+
+  // --- раскладка клавиш: по умолчанию + переназначения пользователя
+  let custom = store.get('keys', {});
+  const keysOf = a => custom[a.id] ?? a.def;
+  let map = new Map();
+  function rebuild() { map = new Map(); for (const a of actions) for (const k of keysOf(a)) map.set(k, a); }
+  rebuild();
+  const comboOf = e => (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + (e.shiftKey ? 'Shift+' : '') + e.code;
+  const NAMES = { Space: 'Пробел', Enter: 'Enter', NumpadEnter: 'Num Enter', Escape: 'Esc', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+    PageUp: 'PgUp', PageDown: 'PgDn', BracketLeft: '[', BracketRight: ']', Equal: '=', Minus: '−', NumpadAdd: 'Num +', NumpadSubtract: 'Num −',
+    Slash: '/', Backslash: '\\', Backquote: '`', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Tab: 'Tab', Home: 'Home', End: 'End', Insert: 'Ins', Delete: 'Del' };
+  function label(k) {
+    if (k === 'Shift+Slash') return '?';
+    const parts = k.split('+'), code = parts.pop();
+    let n = NAMES[code] || code.replace(/^Key/, '').replace(/^Digit/, '').replace(/^Numpad/, 'Num ');
+    return [...parts, n].join(' + ');
+  }
+
+  // --- обработка
+  let capture = null;                         // переназначение: ждём нажатия
+  let held = new Set();
+  document.addEventListener('keydown', e => {
+    if (capture) { e.preventDefault(); e.stopPropagation(); capture(e); return; }
+    const t = e.target;
+    const typing = t.matches('input[type=text], input[type=password], input[type=number], input:not([type]), select, textarea');
+    if (typing) { if (e.key === 'Escape') t.blur(); return; }
+    if (!$('#help').classList.contains('hidden') && (e.code === 'Escape' || e.code === 'F1' || comboOf(e) === 'Shift+Slash')) { e.preventDefault(); hideHelp(); return; }
+    if (!opts.hotkeys) return;
+    if (['ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'].includes(e.code)) return;
+    if (e.metaKey) return;
+    // цифры — сразу начинают ввод частоты
+    if (!e.ctrlKey && !e.altKey && !e.shiftKey && /^(Digit\d|Numpad\d|NumpadDecimal|Period)$/.test(e.code)) {
+      const i = $('#freqInput'); i.focus(); i.value = e.code.includes('Decimal') || e.code === 'Period' ? '.' : e.code.slice(-1);
+      e.preventDefault(); return;
+    }
+    const a = map.get(comboOf(e));
+    if (!a) return;
+    e.preventDefault();
+    if (t.matches('input[type=range]')) t.blur();       // стрелки не должны двигать ползунок
+    if (e.repeat && !a.repeat) return;
+    held.add(e.code); a.down();
+  }, true);
+  document.addEventListener('keyup', e => {
+    if (!held.has(e.code)) return;
+    held.delete(e.code); e.preventDefault();             // чтобы пробел не «нажал» кнопку в фокусе
+    for (const a of actions) if (a.up && keysOf(a).some(k => k.split('+').pop() === e.code)) a.up();
+  }, true);
+
+  // --- справка
+  function helpHtml() {
+    const groups = [...new Set(actions.map(a => a.group))];
+    return groups.map(g => `<div class="hk-group"><h4>${g}</h4>` + actions.filter(a => a.group === g && keysOf(a).length).map(a =>
+      `<div class="hk-row"><span>${a.name}</span><span>${keysOf(a).map(k => `<kbd>${label(k)}</kbd>`).join(' ')}</span></div>`).join('') + '</div>').join('') +
+      `<div class="hk-group"><h4>Ещё</h4><div class="hk-row"><span>Набрать частоту: цифры, затем Enter (7.074 — МГц, 14200 — кГц)</span><span><kbd>0</kbd>…<kbd>9</kbd></span></div>
+       <div class="hk-row"><span>Колесо мыши над частотой — менять разряд под курсором</span><span><kbd>🖱</kbd></span></div></div>`;
+  }
+  function showHelp() { $('#helpBody').innerHTML = helpHtml(); $('#help').classList.remove('hidden'); }
+  function hideHelp() { $('#help').classList.add('hidden'); }
+  $('#help').addEventListener('click', e => { if (e.target.id === 'help' || e.target.closest('[data-close]')) hideHelp(); });
+  $('#helpEdit').onclick = () => { hideHelp(); $('#tabs button[data-tab="opts"]').click(); $('#hkList').scrollIntoView({ block: 'start' }); };
+  $('#btnKeys').onclick = showHelp;
+
+  // --- переназначение в настройках
+  function renderEditor() {
+    const groups = [...new Set(actions.map(a => a.group))];
+    $('#hkList').innerHTML = groups.map(g => `<h4>${g}</h4>` + actions.filter(a => a.group === g).map(a =>
+      `<div class="hk-edit" data-id="${a.id}"><span>${a.name}</span><span class="hk-keys">${keysOf(a).map(k => `<kbd>${label(k)}</kbd>`).join(' ') || '<span class="muted">—</span>'}</span>
+       <button class="btn small" data-act="set">Назначить</button><button class="btn small" data-act="clear" title="Убрать клавиши">×</button></div>`).join('')).join('');
+    $('#btnKeys').title = 'Горячие клавиши (?)';
+    const pk = keysOf(actions[0]); $('#ptt').title = pk.length ? 'PTT — клавиша ' + pk.map(label).join(' / ') : 'PTT';
+  }
+  $('#hkList').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const row = b.closest('.hk-edit'), a = actions.find(x => x.id === row.dataset.id);
+    if (b.dataset.act === 'clear') { custom[a.id] = []; save(); return; }
+    $('.hk-keys', row).innerHTML = '<span class="hk-wait">Нажмите клавишу… (Esc — отмена)</span>';
+    capture = ev => {
+      if (['ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'].includes(ev.code)) return;
+      capture = null;
+      if (ev.code === 'Escape' && !ev.shiftKey) { renderEditor(); return; }
+      const k = comboOf(ev);
+      const other = actions.find(x => x !== a && keysOf(x).includes(k));
+      if (other) { custom[other.id] = keysOf(other).filter(x => x !== k); toast(`«${label(k)}» снята с действия «${other.name}»`, 3000); }
+      custom[a.id] = [k];
+      save();
+    };
+  });
+  function save() { store.set('keys', custom); rebuild(); renderEditor(); }
+  $('#hkReset').onclick = () => { custom = {}; save(); toast('Клавиши по умолчанию'); };
+  $('#optHotkeys').checked = opts.hotkeys;
+  $('#optHotkeys').onchange = e => { opts.hotkeys = e.target.checked; saveOpts(); };
+  renderEditor();
+  return { showHelp };
+})();
 
 // ------------------------------------------------------------------ раскладка и масштаб
 // На мониторе (окно шире 900 и выше 480 точек) всё помещается в окно без прокрутки страницы:

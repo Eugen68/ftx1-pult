@@ -280,3 +280,19 @@ body:not(.fit) .tabs-panel { order: 4; }
 body.measure #sqRow.hidden { display: flex !important; visibility: hidden; }
 body.fit .tabs { flex-wrap: wrap; overflow: visible; }
 body.fit .tabs button { padding: 6px 10px; }
+
+/* горячие клавиши */
+kbd { display: inline-block; min-width: 22px; padding: 2px 6px; border: 1px solid #3a4c5e; border-bottom-width: 2px; border-radius: 5px;
+  background: #18222d; color: var(--text); font: 600 12px var(--mono); text-align: center; line-height: 1.4; }
+.help-dialog { width: min(900px, 94vw); max-height: 88vh; display: flex; flex-direction: column; }
+.help-head { display: flex; justify-content: space-between; align-items: center; }
+.help-body { overflow-y: auto; columns: 2 360px; column-gap: 28px; }
+.hk-group { break-inside: avoid; margin-bottom: 12px; }
+.hk-group h4 { margin: 0 0 6px; color: var(--accent); }
+.hk-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px dashed #1e2a36; font-size: 13px; }
+.hk-row > span:last-child { white-space: nowrap; display: flex; gap: 4px; align-items: center; }
+.hk-list h4 { margin: 12px 0 4px; color: var(--accent); }
+.hk-edit { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 6px; align-items: center; padding: 3px 0; font-size: 13px; }
+.hk-keys { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.hk-wait { color: var(--warn); font-size: 12px; }
+.opts { max-width: 640px; }
