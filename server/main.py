@@ -41,7 +41,7 @@ from cat import Rig, SerialTransport, SerialPtt, CTCSS  # noqa: E402
 from audio import SR, Decimator, Interpolator, Waterfall  # noqa: E402
 from webserver import WebServer  # noqa: E402
 
-VERSION = "1.4"
+VERSION = "1.5"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -825,7 +825,7 @@ async def amain(args):
         asyncio.create_task(st.start_radio())
     if not args.background:
         if cfg.get('open_panel', True) or first_run:
-            open_window(panel_url)
+            open_window(panel_url, (1280, 820))
         if cfg.get('open_pult') and not first_run:
             open_window(pult_url, (1400, 900))
     icon = start_tray(st, panel_url, pult_url)

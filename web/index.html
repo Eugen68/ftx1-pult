@@ -34,6 +34,7 @@
 </header>
 
 <main class="layout">
+  <div class="col-left" id="colLeft">
   <!-- ===== Дисплей трансивера ===== -->
   <section class="panel display" id="display">
     <div class="vfo-row">
@@ -62,6 +63,37 @@
     </div>
   </section>
 
+  <!-- ===== Настройка частоты ===== -->
+  <section class="panel tune">
+    <div class="tune-row">
+      <canvas class="dial" id="dial" title="Основная ручка: вращайте по кругу мышью или пальцем, колесо мыши — по шагу. Резкий бросок — ручка докрутится по инерции"></canvas>
+      <div class="tune-side">
+      <div class="tune-btns"><button class="btn" data-step="-1" title="Шаг вниз">−</button><button class="btn" data-step="1" title="Шаг вверх">+</button></div>
+      <select id="step" title="Шаг настройки (на одно деление ручки)">
+        <option value="1">1 Гц</option><option value="10" selected>10 Гц</option><option value="50">50 Гц</option>
+        <option value="100">100 Гц</option><option value="500">500 Гц</option><option value="1000">1 кГц</option>
+        <option value="5000">5 кГц</option><option value="9000">9 кГц</option><option value="10000">10 кГц</option>
+        <option value="12500">12.5 кГц</option><option value="25000">25 кГц</option><option value="100000">100 кГц</option>
+      </select>
+      <input id="freqInput" inputmode="decimal" placeholder="МГц, 7.074" class="freq-input">
+      </div>
+    </div>
+    <div class="btn-grid bands" id="bands"></div>
+    <div class="btn-grid modes" id="modes"></div>
+    <div class="sq-row" id="sqRow">
+      <span class="sq-title">Шумодав</span>
+      <div class="seg" id="sqMode">
+        <button data-v="off">Выкл</button><button data-v="radio" title="По шумоподавителю трансивера (SQL)">По ТРХ</button><button data-v="level" title="По уровню сигнала — порог ниже">По уровню</button>
+      </div>
+      <label class="sq-ctl" id="sqRadioCtl" title="SQL трансивера: чем больше, тем сильнее нужен сигнал">SQL <input type="range" id="sqRadio" min="0" max="255"><b id="sqRadioV">—</b></label>
+      <label class="sq-ctl hidden" id="sqLevelCtl" title="Порог открытия по уровню звука">Порог <input type="range" id="sqThr" min="-100" max="-10"><b id="sqThrV"></b></label>
+      <span class="sq-lamp" id="sqLamp" title="Звук открыт / закрыт шумодавом"></span>
+      <span class="muted small mono" id="sqLvl"></span>
+    </div>
+  </section>
+
+  </div>
+
   <!-- ===== Водопад ===== -->
   <section class="panel wfpanel">
     <div class="wf-tools">
@@ -78,34 +110,6 @@
       <canvas id="overlay"></canvas>
       <div class="wf-cursor" id="wfCursor"></div>
       <div class="wf-msg hidden" id="wfMsg"></div>
-    </div>
-  </section>
-
-  <!-- ===== Настройка частоты ===== -->
-  <section class="panel tune">
-    <div class="tune-row">
-      <button class="btn big" data-step="-1">−</button>
-      <div class="knob" id="knob" title="Тяните влево/вправо или крутите колесо"><div class="knob-dial" id="knobDial"></div></div>
-      <button class="btn big" data-step="1">+</button>
-      <select id="step">
-        <option value="1">1 Гц</option><option value="10" selected>10 Гц</option><option value="50">50 Гц</option>
-        <option value="100">100 Гц</option><option value="500">500 Гц</option><option value="1000">1 кГц</option>
-        <option value="5000">5 кГц</option><option value="9000">9 кГц</option><option value="10000">10 кГц</option>
-        <option value="12500">12.5 кГц</option><option value="25000">25 кГц</option><option value="100000">100 кГц</option>
-      </select>
-      <input id="freqInput" inputmode="decimal" placeholder="МГц, напр. 7.074" class="freq-input">
-    </div>
-    <div class="btn-grid bands" id="bands"></div>
-    <div class="btn-grid modes" id="modes"></div>
-    <div class="sq-row" id="sqRow">
-      <span class="sq-title">Шумодав</span>
-      <div class="seg" id="sqMode">
-        <button data-v="off">Выкл</button><button data-v="radio" title="По шумоподавителю трансивера (SQL)">По ТРХ</button><button data-v="level" title="По уровню сигнала — порог ниже">По уровню</button>
-      </div>
-      <label class="sq-ctl" id="sqRadioCtl" title="SQL трансивера: чем больше, тем сильнее нужен сигнал">SQL <input type="range" id="sqRadio" min="0" max="255"><b id="sqRadioV">—</b></label>
-      <label class="sq-ctl hidden" id="sqLevelCtl" title="Порог открытия по уровню звука">Порог <input type="range" id="sqThr" min="-100" max="-10"><b id="sqThrV"></b></label>
-      <span class="sq-lamp" id="sqLamp" title="Звук открыт / закрыт шумодавом"></span>
-      <span class="muted small mono" id="sqLvl"></span>
     </div>
   </section>
 

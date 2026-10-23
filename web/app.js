@@ -170,7 +170,7 @@ function applyState(d, full) {
   drawOverlay();
   if ('tuning' in d) $('#tuneState').textContent = S.tuning ? 'Идёт настройка…' : '';
   if ('tx' in d) document.body.classList.toggle('txon', !!S.tx);
-  if ('mode' in d) { if (!C.wfMax && !C.bw) updateSpan(); }
+  if ('mode' in d) { if (!C.wfMax && !C.bw) updateSpan(); renderSq(); pushGate(); }
   if ('busy' in d || 'tx' in d) pushGate();
   if ('sql' in d) renderSq();
 }
@@ -271,21 +271,104 @@ $('#freqInput').addEventListener('keydown', e => {
   if (v < 1000) v *= 1e6; else if (v < 1e6) v *= 1e3;   // МГц / кГц / Гц
   setFreq(v); e.target.value = ''; e.target.blur();
 });
-// Ручка настройки: перетаскивание и колесо
-(() => {
-  const k = $('#knob'), dial = $('#knobDial');
-  let x0 = null, acc = 0, off = 0;
-  k.addEventListener('pointerdown', e => { x0 = e.clientX; acc = 0; k.setPointerCapture(e.pointerId); });
-  k.addEventListener('pointermove', e => {
-    if (x0 == null) return;
-    const dx = e.clientX - x0; x0 = e.clientX; acc += dx; off += dx;
-    dial.style.backgroundPosition = `${off}px 0`;
-    const n = Math.trunc(acc / 6);
-    if (n) { acc -= n * 6; nudge(n); }
+// Основная ручка настройки — как валкодер трансивера.
+// Вращение по кругу: 100 делений на оборот, одно деление = выбранный шаг.
+// Бросок с разгона — ручка докручивается по инерции и плавно останавливается.
+const dial = (() => {
+  const cv = $('#dial'), ctx = cv.getContext('2d');
+  const STEPS = 100, STEP_A = 2 * Math.PI / STEPS;
+  let angle = 0, acc = 0, last = null, hist = [], vel = 0, spinning = false, size = 0;
+  function resize() {
+    const css = cv.clientWidth; if (!css) return;
+    const px = Math.round(css * (window.devicePixelRatio || 1) * (C.zoom || 1));
+    if (px !== size) { size = px; cv.width = cv.height = px; }
+    draw();
+  }
+  function draw() {
+    if (!size) return;
+    const R = size / 2, c = R;
+    ctx.clearRect(0, 0, size, size);
+    // посадочное кольцо с меткой
+    ctx.beginPath(); ctx.arc(c, c, R * 0.99, 0, 2 * Math.PI); ctx.fillStyle = '#0a0f14'; ctx.fill();
+    ctx.strokeStyle = '#36c5f0'; ctx.lineWidth = R * 0.04; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(c, R * 0.02); ctx.lineTo(c, R * 0.09); ctx.stroke();
+    // тело ручки
+    const body = R * 0.88;
+    let g = ctx.createRadialGradient(c - body * 0.35, c - body * 0.4, body * 0.1, c, c, body);
+    g.addColorStop(0, '#5a6672'); g.addColorStop(0.55, '#2b333c'); g.addColorStop(1, '#14191f');
+    ctx.beginPath(); ctx.arc(c, c, body, 0, 2 * Math.PI); ctx.fillStyle = g; ctx.fill();
+    // накатка по краю (вращается)
+    ctx.save(); ctx.translate(c, c); ctx.rotate(angle);
+    ctx.lineWidth = Math.max(1, R * 0.018);
+    for (let i = 0; i < 90; i++) {
+      const a = i * 2 * Math.PI / 90;
+      ctx.strokeStyle = i % 2 ? 'rgba(0,0,0,.55)' : 'rgba(255,255,255,.10)';
+      ctx.beginPath(); ctx.moveTo(Math.cos(a) * body * 0.86, Math.sin(a) * body * 0.86);
+      ctx.lineTo(Math.cos(a) * body * 0.995, Math.sin(a) * body * 0.995); ctx.stroke();
+    }
+    // центральный диск со «шлифовкой»
+    const cap = body * 0.8;
+    g = ctx.createRadialGradient(-cap * 0.3, -cap * 0.35, cap * 0.05, 0, 0, cap);
+    g.addColorStop(0, '#4b5561'); g.addColorStop(1, '#1d242c');
+    ctx.beginPath(); ctx.arc(0, 0, cap, 0, 2 * Math.PI); ctx.fillStyle = g; ctx.fill();
+    ctx.lineWidth = Math.max(0.5, R * 0.006);
+    for (let r = cap * 0.15; r < cap; r += cap * 0.06) {
+      ctx.strokeStyle = 'rgba(255,255,255,.035)'; ctx.beginPath(); ctx.arc(0, 0, r, 0, 2 * Math.PI); ctx.stroke();
+    }
+    // лунка под палец
+    const dx = 0, dy = -cap * 0.58, dr = cap * 0.2;
+    g = ctx.createRadialGradient(dx + dr * 0.3, dy + dr * 0.35, dr * 0.1, dx, dy, dr);
+    g.addColorStop(0, '#2c343d'); g.addColorStop(1, '#0d1116');
+    ctx.beginPath(); ctx.arc(dx, dy, dr, 0, 2 * Math.PI); ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = Math.max(1, R * 0.01);
+    ctx.beginPath(); ctx.arc(dx, dy, dr, Math.PI * 0.15, Math.PI * 0.85); ctx.stroke();
+    ctx.restore();
+    // блик сверху
+    g = ctx.createLinearGradient(0, c - body, 0, c + body);
+    g.addColorStop(0, 'rgba(255,255,255,.10)'); g.addColorStop(0.5, 'rgba(255,255,255,0)');
+    ctx.beginPath(); ctx.arc(c, c, body, 0, 2 * Math.PI); ctx.fillStyle = g; ctx.fill();
+  }
+  function turn(da) {                      // da — поворот в радианах (по часовой — вверх по частоте)
+    angle += da; acc += da / STEP_A;
+    const n = Math.trunc(acc);
+    if (n) { acc -= n; nudge(n); }
+    draw();
+  }
+  const angAt = e => { const r = cv.getBoundingClientRect(); return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)); };
+  const nearCenter = e => { const r = cv.getBoundingClientRect(); return Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)) < r.width * 0.08; };
+  cv.addEventListener('pointerdown', e => {
+    e.preventDefault(); cv.setPointerCapture(e.pointerId);
+    spinning = false; vel = 0; last = angAt(e); hist = [[performance.now(), 0]];
   });
-  const end = () => { x0 = null; };
-  k.addEventListener('pointerup', end); k.addEventListener('pointercancel', end);
-  k.addEventListener('wheel', e => { e.preventDefault(); nudge(e.deltaY < 0 ? 1 : -1); off += e.deltaY < 0 ? 6 : -6; dial.style.backgroundPosition = `${off}px 0`; }, { passive: false });
+  cv.addEventListener('pointermove', e => {
+    if (last == null || nearCenter(e)) return;
+    const a = angAt(e); let d = a - last;
+    if (d > Math.PI) d -= 2 * Math.PI; else if (d < -Math.PI) d += 2 * Math.PI;
+    last = a; turn(d);
+    const now = performance.now(); hist.push([now, d]);
+    while (hist.length && now - hist[0][0] > 90) hist.shift();
+  });
+  const release = () => {
+    if (last == null) return;
+    last = null;
+    if (hist.length > 1) {
+      const dt = (hist[hist.length - 1][0] - hist[0][0]) / 1000;
+      const sum = hist.slice(1).reduce((s, h) => s + h[1], 0);
+      vel = dt > 0.01 ? sum / dt : 0;              // рад/с
+    }
+    if (Math.abs(vel) > 4) { spinning = true; let t0 = performance.now();
+      const step = now => {
+        if (!spinning) return;
+        const dt = (now - t0) / 1000; t0 = now;
+        turn(vel * dt); vel *= Math.exp(-dt * 2.5);
+        if (Math.abs(vel) > 0.6) requestAnimationFrame(step); else spinning = false;
+      };
+      requestAnimationFrame(step);
+    }
+  };
+  cv.addEventListener('pointerup', release); cv.addEventListener('pointercancel', release);
+  cv.addEventListener('wheel', e => { e.preventDefault(); spinning = false; turn((e.deltaY < 0 ? 1 : -1) * STEP_A); }, { passive: false });
+  return { resize, draw };
 })();
 document.addEventListener('keydown', e => {
   if (e.target.matches('input, select, textarea')) return;
@@ -427,6 +510,7 @@ $('#wfFloor').value = store.get('wfFloor', 70); $('#wfRange').value = store.get(
 $('#wfFloor').oninput = buildLut; $('#wfRange').oninput = buildLut;
 
 function sizeCanvases() {
+  if (typeof dial !== 'undefined') dial.resize();
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   for (const c of [wf.spec, wf.ov]) { c.width = Math.round(c.clientWidth * dpr); c.height = Math.round(c.clientHeight * dpr); }
   wf.rows = Math.max(50, Math.round(wf.canvas.clientHeight));
@@ -551,14 +635,18 @@ $$('#spanSeg button').forEach(b => {
 window.addEventListener('resize', sizeCanvases);
 
 // ------------------------------------------------------------------ шумодав
+const isFMmode = m => /FM/.test(m || '');            // FM, FM-N, DATA-FM, C4FM…
 function pushGate() {
   if (!C.player) return;
   C.player.port.postMessage({ gate: {
-    mode: opts.sqMode, busy: S.busy === undefined ? true : !!S.busy, thr: opts.sqThr,
+    // на SSB/CW/AM/DATA шумодав не нужен — только в FM
+    mode: isFMmode(S.mode) ? opts.sqMode : 'off',
+    busy: S.busy === undefined ? true : !!S.busy, thr: opts.sqThr,
     tx: !!S.tx || (C.pttPressed && C.txOwner), tailMs: opts.tail,
   } });
 }
 function renderSq() {
+  $('#sqRow').classList.toggle('hidden', !isFMmode(S.mode));
   $$('#sqMode button').forEach(b => b.classList.toggle('on', b.dataset.v === opts.sqMode));
   $('#sqRadioCtl').classList.toggle('hidden', opts.sqMode === 'level');
   $('#sqLevelCtl').classList.toggle('hidden', opts.sqMode !== 'level');
@@ -881,23 +969,44 @@ $('#btnFull').onclick = () => {
 };
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => { });
 
-// ------------------------------------------------------------------ масштаб интерфейса
-// «Авто»: макет рассчитан на окно ~1440×860; на больших экранах увеличиваем, на маленьких
-// ноутбуках — немного уменьшаем. На телефонах (узкий экран) — 100 %.
-function applyScale() {
-  let z = parseFloat(opts.scale);
-  if (!(z > 0)) {
-    const w = window.innerWidth, h = window.innerHeight;
-    z = w < 760 ? 1 : clamp(Math.min(w / 1440, h / 860), 0.8, 2.4);
-    z = Math.round(z * 20) / 20;
-  }
-  if (document.documentElement.style.zoom !== String(z)) {
-    document.documentElement.style.zoom = z;
-    C.zoom = z;
-    sizeCanvases();
-  }
+// ------------------------------------------------------------------ раскладка и масштаб
+// На мониторе (окно шире 900 и выше 480 точек) всё помещается в окно без прокрутки страницы:
+// слева дисплей и ручка, справа водопад на всю свободную площадь, вкладки — со своей прокруткой.
+// «Авто»-масштаб подбирается так, чтобы левая колонка целиком влезала по высоте.
+// На телефоне — обычная прокручиваемая колонка.
+function setZoom(z) {
+  const w = window.innerWidth, h = window.innerHeight, fit = w >= 900 && h >= 480;
+  document.documentElement.style.zoom = z;
+  C.zoom = z;
+  const root = document.documentElement.style;
+  root.setProperty('--app-h', (h / z) + 'px');
+  document.body.classList.toggle('fit', fit);
+  document.body.classList.toggle('wide', fit && w / z >= 1560);
+  return fit;
 }
-window.addEventListener('resize', () => { if (opts.scale === 'auto') applyScale(); });
+function applyScale() {
+  const w = window.innerWidth, h = window.innerHeight;
+  let z = parseFloat(opts.scale);
+  const auto = !(z > 0);
+  if (auto) z = w < 760 ? 1 : clamp(Math.min(w / 1440, h / 860), 0.55, 2.4);
+  const fit = setZoom(z);
+  if (fit && auto) {
+    z = Math.min(z, w / 840);                     // левая колонка + водопад по ширине
+    setZoom(z);
+    const cl = $('#colLeft');
+    document.body.classList.add('measure');       // мерить со строкой шумодава, чтобы масштаб не прыгал
+    for (let i = 0; i < 4; i++) {
+      const need = cl.scrollHeight, have = cl.clientHeight;
+      if (need <= have + 1) break;
+      z = Math.max(0.5, z * have / need * 0.99);
+      setZoom(z);
+    }
+    document.body.classList.remove('measure');
+  }
+  sizeCanvases();
+}
+let resizeT;
+window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(applyScale, 60); });
 
 // ------------------------------------------------------------------ старт
 initControls();

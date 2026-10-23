@@ -55,10 +55,31 @@ code { font-family: var(--mono); color: var(--lcd); }
   grid-template-columns: minmax(0, 1fr);
   max-width: 2400px; margin: 0 auto;
 }
-@media (min-width: 1100px) {
-  .layout { grid-template-columns: 430px minmax(0, 1fr); grid-template-areas: "disp wf" "tune wf" "tabs tabs"; }
-  .display { grid-area: disp; } .wfpanel { grid-area: wf; } .tune { grid-area: tune; } .tabs-panel { grid-area: tabs; }
+/* Телефон / узкое окно: обычная прокручиваемая колонка */
+.col-left { display: contents; }
+
+/* ===== Монитор: всё помещается в окно, страница не прокручивается =====
+   Класс fit ставит app.js (широкое окно), wide — когда хватает места на третью колонку.
+   --app-h — высота окна с учётом масштаба (zoom). */
+body.fit { height: var(--app-h, 100vh); overflow: hidden; padding-bottom: 0; display: flex; flex-direction: column; }
+body.fit .topbar { position: static; flex: none; }
+body.fit .layout {
+  flex: 1; min-height: 0; max-width: none; width: 100%;
+  grid-template-columns: 390px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, var(--tabs-h, 38%));
+  grid-template-areas: "left wf" "left tabs";
 }
+body.fit.wide .layout { grid-template-columns: 390px minmax(0, 1fr) minmax(400px, 30%); grid-template-rows: minmax(0, 1fr); grid-template-areas: "left wf tabs"; }
+body.fit .col-left { grid-area: left; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+body.fit .col-left > .panel { flex: none; }
+body.fit .wfpanel { grid-area: wf; display: flex; flex-direction: column; min-height: 0; }
+body.fit .wf-wrap { flex: 1; height: auto; min-height: 120px; }
+body.fit .tabs-panel { grid-area: tabs; display: flex; flex-direction: column; min-height: 0; }
+body.fit .tabs-panel > .tab.on { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; padding-right: 2px; }
+body.fit .menu-list { max-height: none; }
+body.fit .pttbar { position: static; flex: none; }
+body.fit .btn-grid { grid-template-columns: repeat(5, 1fr); }
+body.fit .btn-grid .btn { min-height: 32px; padding: 5px 4px; }
+body.fit .freq { font-size: 52px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; min-width: 0; }
 
 /* ---------- дисплей ---------- */
@@ -117,7 +138,6 @@ body.txon .meter#mS, body.txon .meter.scale-row { display: none; }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button.on { background: var(--accent-2); color: #fff; }
 .wf-wrap { position: relative; height: clamp(220px, 42vh, 560px); background: #000; border-radius: 6px; overflow: hidden; touch-action: none; cursor: crosshair; }
-@media (min-width: 1100px) { .wf-wrap { height: calc(100% - 44px); min-height: 420px; } .wfpanel { display: flex; flex-direction: column; } }
 .wf-wrap canvas { position: absolute; left: 0; width: 100%; display: block; }
 #spec { top: 0; height: 28%; }
 #wf { top: 28%; height: 72%; image-rendering: pixelated; }
@@ -130,9 +150,13 @@ body.txon .meter#mS, body.txon .meter.scale-row { display: none; }
 
 /* ---------- настройка ---------- */
 .tune-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.knob { flex: 1; min-width: 140px; height: 54px; border-radius: 27px; background: repeating-linear-gradient(90deg, #1b2530 0 6px, #141c25 6px 12px); border: 1px solid var(--line); position: relative; overflow: hidden; cursor: ew-resize; touch-action: none; }
-.knob-dial { position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 11px, #3a4c5e 11px 12px); }
-.knob::after { content: ""; position: absolute; left: 50%; top: 6px; bottom: 6px; width: 2px; background: var(--accent); }
+.tune-row { flex-wrap: nowrap; align-items: center; gap: 14px; }
+.dial { width: 150px; height: 150px; flex: none; touch-action: none; cursor: grab; border-radius: 50%; }
+.dial:active { cursor: grabbing; }
+.tune-side { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.tune-side select, .tune-side .freq-input { width: 100%; }
+.tune-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tune-btns .btn { font-size: 20px; min-height: 40px; padding: 0; }
 select, input.text, input.num, .freq-input {
   background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 7px;
   padding: 8px; font: inherit; min-height: 38px;
@@ -237,6 +261,7 @@ input[type=range] { accent-color: var(--accent); height: 26px; }
   .wf-tools .mini input { width: 60px; }
   #wfHint { display: none; }
   .freq-input { width: 100%; }
+  .dial { width: 130px; height: 130px; }
   .ctl-grid { grid-template-columns: 1fr 1fr; }
   .pttbar { grid-template-columns: 60px 1fr 70px; gap: 8px; }
   .ptt { width: 100%; }
@@ -246,3 +271,12 @@ input[type=range] { accent-color: var(--accent); height: 26px; }
   .wf-tools { gap: 6px; }
   .seg button { padding: 6px 7px; }
 }
+
+/* порядок блоков на телефоне: дисплей, водопад, настройка, вкладки */
+body:not(.fit) .display { order: 1; }
+body:not(.fit) .wfpanel { order: 2; }
+body:not(.fit) .tune { order: 3; }
+body:not(.fit) .tabs-panel { order: 4; }
+body.measure #sqRow.hidden { display: flex !important; visibility: hidden; }
+body.fit .tabs { flex-wrap: wrap; overflow: visible; }
+body.fit .tabs button { padding: 6px 10px; }

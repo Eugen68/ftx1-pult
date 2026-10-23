@@ -240,14 +240,28 @@ const scaleOpt = (() => { try { return localStorage.getItem('ftx1.panelScale') |
 $('#scale').value = scaleOpt;
 function applyScale() {
   let z = parseFloat($('#scale').value);
-  if (!(z > 0)) {
-    const w = innerWidth, h = innerHeight;
-    z = w < 700 ? 1 : Math.max(0.8, Math.min(2.2, Math.min(w / 1080, h / 860)));
-    z = Math.round(z * 20) / 20;
-  }
+  const auto = !(z > 0), w = innerWidth, h = innerHeight;
+  if (auto) z = w < 700 ? 1 : Math.max(0.6, Math.min(2.2, Math.min(w / 1080, h / 860)));
   document.documentElement.style.zoom = z;
+  if (auto && w >= 700) {
+    // наибольший масштаб, при котором панель целиком влезает в окно (число колонок
+    // зависит от масштаба, поэтому подбираем делением пополам)
+    const fits = zz => { document.documentElement.style.zoom = zz; return $('.wrap').getBoundingClientRect().height <= h - 3; };
+    if (!fits(z)) {
+      let lo = 0.45, hi = z;
+      for (let i = 0; i < 8; i++) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; }
+      fits(lo);
+    }
+  }
 }
 $('#scale').onchange = () => { try { localStorage.setItem('ftx1.panelScale', $('#scale').value); } catch { } applyScale(); };
 addEventListener('resize', () => { if ($('#scale').value === 'auto') applyScale(); });
+// содержимое панели меняется (данные, QR-код, список клиентов) — пересчитать масштаб
+let lastH = 0, roT;
+new ResizeObserver(() => {
+  const hh = $('.wrap').offsetHeight;
+  if (Math.abs(hh - lastH) < 3) return;
+  lastH = hh; clearTimeout(roT); roT = setTimeout(applyScale, 80);
+}).observe($('.wrap'));
 applyScale();
 connect();
