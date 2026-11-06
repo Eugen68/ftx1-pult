@@ -8,3 +8,4 @@ config.json
 cert.pem
 key.pem
 ftx1-pult.log*
+fax/
