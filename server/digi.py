@@ -274,7 +274,8 @@ class FaxDecoder:
         self.center = 1900.0
         self.auto = True
         self.slant = 0.0                    # ppm поправка частоты дискретизации
-        h = np.sinc(2 * 650 / self.FS * (np.arange(63) - 31)) * np.blackman(63)
+        self.afc = True                     # подстройка центра/девиации по тону старта и фазированию
+        h = np.sinc(2 * 950 / self.FS * (np.arange(63) - 31)) * np.blackman(63)
         self.lp = (h / h.sum()).astype(np.float32)
         self.reset()
 
@@ -289,6 +290,9 @@ class FaxDecoder:
         self.val = np.zeros(0, np.float32)      # демодулированная яркость, ждущая разбиения на строки
         self.pos = 0.0                          # начало текущей строки в self.val
         self.tone_buf = np.zeros(0, np.float32)
+        self.fbuf = np.zeros(0, np.float32)     # мгновенная частота (Гц), последние 4 с — для АПЧ и индикатора
+        self.sig = {'q': 0.0, 'lo': 0, 'hi': 0}
+        self.stat_t = 0
         self.tone_t = 0                         # счётчик отсчётов: время по сигналу, а не по часам
         self.nsamp = 0
         self.tone_hist = []                     # последние обнаруженные тоны (300/450/675/None)
@@ -298,7 +302,11 @@ class FaxDecoder:
         self.started = 0.0
         self.t_info = 0.0
 
-    def configure(self, enabled=None, lpm=None, ioc=None, auto=None, slant=None, dev=None):
+    def configure(self, enabled=None, lpm=None, ioc=None, auto=None, slant=None, dev=None, center=None, afc=None):
+        if center:
+            self.center = float(min(max(float(center), 1000), 2800))
+        if afc is not None:
+            self.afc = bool(afc)
         if lpm:
             self.lpm = int(lpm)
         if ioc:
@@ -359,8 +367,10 @@ class FaxDecoder:
         zz = np.concatenate([[self.prev], z])
         self.prev = z[-1] if len(z) else self.prev
         dphi = np.angle(zz[1:] * np.conj(zz[:-1]))
-        f = self.center + dphi * self.FS / (2 * np.pi)
+        f = (self.center + dphi * self.FS / (2 * np.pi)).astype(np.float32)
         v = np.clip((f - (self.center - self.dev)) / (2 * self.dev), 0, 1).astype(np.float32)
+        self.fbuf = np.concatenate([self.fbuf, f])[-4 * self.FS:]
+        self._stats()
         self._tones(v)
         if self.state == 'idle':
             return
@@ -385,7 +395,34 @@ class FaxDecoder:
         now = time.monotonic()
         if now - self.t_info > 1:
             self.t_info = now
-            self.on_event({'t': 'fax_info', 'state': self.state, 'rows': len(self.rows), 'slant': round(self.slant)})
+            self.on_event(self.info())
+
+    def info(self):
+        return {'t': 'fax_info', 'state': self.state, 'rows': len(self.rows), 'slant': round(self.slant),
+                'center': round(self.center), 'dev': round(self.dev), **self.sig}
+
+    def _stats(self):
+        """Есть ли в полосе ЧМ-сигнал факса и где его чёрный/белый (для индикатора)."""
+        if self.nsamp - self.stat_t < self.FS or len(self.fbuf) < self.FS:
+            return
+        self.stat_t = self.nsamp
+        f = self.fbuf[-2 * self.FS:]
+        lo, hi = np.percentile(f, [3, 97])
+        q = float(np.mean(np.abs(f - self.center) < self.dev + 120))     # доля «внутри» 1500–2300
+        # у шума частота размазана по всей полосе фильтра; у факса сидит между чёрным и белым
+        self.sig = {'q': round(q, 2), 'lo': int(lo), 'hi': int(hi)}
+
+    def _afc(self, what):
+        """Тон старта и фазирование — чистые чёрный и белый: по ним уточняем центр и девиацию."""
+        if not self.afc or len(self.fbuf) < self.FS // 2:
+            return
+        f = self.fbuf[-self.FS // 2:]
+        lo, hi = np.percentile(f, [4, 96])
+        if 500 < hi - lo < 1100 and 1000 < lo and hi < 2900:
+            c, d = (lo + hi) / 2, (hi - lo) / 2
+            if abs(c - self.center) > 25 or abs(d - self.dev) > 25:
+                self.center, self.dev = float(c), float(d)
+                self.on_event({'t': 'fax_note', 'msg': 'АПЧ (%s): чёрный %d Гц, белый %d Гц' % (what, lo, hi)})
 
     def _tones(self, v):
         """Тоны старта/стопа: яркость меняется с частотой 300 / 675 Гц (старт) или 450 Гц (стоп)."""
@@ -414,6 +451,7 @@ class FaxDecoder:
                 if self.state == 'image':
                     self.finish('новая карта')
                 self.ioc = 576 if t == 300 else 288
+                self._afc('тон старта')
                 self.rows, self.phase_px = [], []
                 self.val, self.pos = np.zeros(0, np.float32), 0.0
                 self._set_state('phasing')
@@ -440,6 +478,8 @@ class FaxDecoder:
                     self.phase_px.append((np.angle(res) % (2 * np.pi)) / (2 * np.pi) * W)
             if ok:
                 self.bad_phase = 0
+                if len(self.phase_px) == 6:
+                    self._afc('фазирование')
                 if len(self.phase_px) >= 40:
                     self._end_phasing()
             else:

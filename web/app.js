@@ -1186,7 +1186,7 @@ const cwDesk = (() => {
 // ------------------------------------------------------------------ RTTY и метеофакс
 const digiDesk = (() => {
   const st = { sub: store.get('dgSub', 'rtty'), rt: false, fx: false, fc: 2210, shift: 170, baud: 45.45,
-    rows: [], W: 1809, fxState: 'idle', txText: '', slant: 0 };
+    rows: [], W: 1809, fxState: 'idle', txText: '', slant: 0, fxC: 1900, fxD: 400 };
   const scr = $('#rtScreen'), cv = $('#fxCanvas'), wrap = $('#fxWrap');
   const RT_PRESETS = [
     ['', '— выбрать —'],
@@ -1219,7 +1219,7 @@ const digiDesk = (() => {
     const m = [];
     const rt = st.rt && (st.sub === 'rtty' || !st.fx), fx = st.fx && (st.sub === 'fax' || !st.rt);
     if (rt) { m.push([st.fc - st.shift / 2, '#ffb547'], [st.fc + st.shift / 2, '#4fc3ff']); }
-    if (fx) { m.push([1500, '#bbbbbb'], [2300, '#ffffff']); }
+    if (fx) { m.push([st.fxC - st.fxD, '#bbbbbb'], [st.fxC + st.fxD, '#ffffff']); }
     C.dgMarks = m; drawOverlay();
   }
 
@@ -1247,8 +1247,8 @@ const digiDesk = (() => {
     $('#rtBaud').value = String(p[2].baud); $('#rtShift').value = String(p[2].shift);
     st.shift = p[2].shift; st.fc = +$('#rtFc').value;
     if (p[2].f) {                                   // частота станции — середина между тонами; ставим её на центр декодера
-      setParam('mode', 'DATA-U'); setFreq(Math.round((p[2].f - st.fc) / 10) * 10);
-      toast(`DATA-U, ${(p[2].f / 1000).toFixed(1)} кГц на центре ${st.fc} Гц. Расписание станций меняется — сверяйтесь со свежим.`, 6000);
+      setParam('mode', 'USB'); setFreq(Math.round((p[2].f - st.fc) / 10) * 10);
+      toast(`USB, ${(p[2].f / 1000).toFixed(1)} кГц на центре ${st.fc} Гц. Расписание станций меняется — сверяйтесь со свежим.`, 6000);
     }
     if (!st.rt) { st.rt = true; renderRt(); }
     sendRt(); marks(); e.target.value = '';
@@ -1327,24 +1327,28 @@ const digiDesk = (() => {
     const end = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 40;
     if (end) wrap.scrollTop = wrap.scrollHeight;
   }
-  function sendFx() { send({ t: 'fax_dec', on: st.fx, lpm: +$('#fxLpm').value, ioc: +$('#fxIoc').value, auto: $('#fxAuto').checked }); }
+  function sendFx(center) {
+    send({ t: 'fax_dec', on: st.fx, lpm: +$('#fxLpm').value, ioc: +$('#fxIoc').value, auto: $('#fxAuto').checked,
+      afc: $('#fxAfc').checked, ...(center ? { center } : {}) });
+  }
   function renderFx() {
     $('#fxDecBtn').classList.toggle('on', st.fx);
     $('#fxDecBtn').textContent = st.fx ? '● Приём вкл' : '○ Приём выкл';
   }
   $('#fxDecBtn').onclick = () => { st.fx = !st.fx; store.set('fxOn', st.fx); renderFx(); sendFx(); marks(); };
-  ['#fxLpm', '#fxIoc', '#fxAuto'].forEach(id => $(id).onchange = sendFx);
+  ['#fxLpm', '#fxIoc', '#fxAuto', '#fxAfc'].forEach(id => $(id).onchange = () => sendFx());
+  $('#fxCenter').onchange = () => sendFx(+$('#fxCenter').value);
   $('#fxStart').onclick = () => { if (!st.fx) { st.fx = true; renderFx(); sendFx(); marks(); } st.rows = []; redraw(); send({ t: 'fax_start' }); };
   $('#fxStop').onclick = () => send({ t: 'fax_stop' });
   const slant = (e, s) => send({ t: 'fax_slant', d: s * (e.shiftKey ? 10 : 50) });
   $('#fxSlM').onclick = e => slant(e, -1); $('#fxSlP').onclick = e => slant(e, 1);
   $('#fxPreset').onchange = e => {
     const p = FX_PRESETS.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
-    setParam('mode', 'DATA-U'); setFreq(p[2] - 1900);
+    setParam('mode', 'USB'); setFreq(p[2] - 1900);
     $('#fxLpm').value = '120'; $('#fxIoc').value = '576';
     if (!st.fx) { st.fx = true; renderFx(); }
     sendFx(); marks();
-    toast(`DATA-U ${((p[2] - 1900) / 1000).toFixed(1)} кГц (на 1,9 кГц ниже ${(p[2] / 1000).toFixed(1)}). Ждём тон старта — карты идут по расписанию DWD.`, 6000);
+    toast(`USB ${((p[2] - 1900) / 1000).toFixed(1)} кГц (на 1,9 кГц ниже ${(p[2] / 1000).toFixed(1)}). Ждём тон старта — карты идут по расписанию DWD.`, 6000);
     e.target.value = '';
   };
   cv.addEventListener('click', e => {               // клик — здесь левый край карты
@@ -1395,13 +1399,22 @@ const digiDesk = (() => {
         st.fxState = m.state; if (m.W) st.W = m.W;
         if (m.slant !== undefined) $('#fxSlant').textContent = m.slant;
         if (m.lpm) $('#fxLpm').value = String(m.lpm);
+        if (m.center) { st.fxC = m.center; st.fxD = m.dev || 400; $('#fxCenter').value = m.center; $('#fxAfc').checked = m.afc !== false; marks(); }
         if (m.ioc) $('#fxIoc').value = String(m.ioc);
         if (m.saved && m.saved.length) $('#fxSaved').textContent = 'Сохранено на сервере (папка fax): ' + m.saved.slice(-4).join(', ');
         $('#fxInfo').textContent = (FX_ST[m.state] || m.state) + (m.rows ? ` · ${m.rows} строк` : '');
         break;
-      case 'fax_info':
-        $('#fxInfo').textContent = (FX_ST[m.state] || m.state) + (m.rows ? ` · ${m.rows} строк` : '');
-        $('#fxSlant').textContent = m.slant; break;
+      case 'fax_info': {
+        const sig = m.q === undefined ? '' : m.q >= 0.9 ? ` · сигнал ✓ ${m.lo}–${m.hi} Гц` : ' · сигнала факса нет (шум)';
+        $('#fxInfo').textContent = (FX_ST[m.state] || m.state) + (m.rows ? ` · ${m.rows} строк` : '') + sig;
+        $('#fxSlant').textContent = m.slant;
+        if (m.center && (m.center !== st.fxC || m.dev !== st.fxD)) {
+          st.fxC = m.center; st.fxD = m.dev || 400;
+          if (document.activeElement !== $('#fxCenter')) $('#fxCenter').value = m.center;
+          marks();
+        }
+        break;
+      }
       case 'fax_note': toast('Факс: ' + m.msg, 4500); break;
       case 'fax_saved': toast('Факс сохранён: ' + m.path, 6000); break;
     }
@@ -1417,7 +1430,7 @@ const digiDesk = (() => {
   }
   function pickAudio(hz) {                       // правый клик по водопаду на этой вкладке
     if (st.sub === 'rtty') { $('#rtFc').value = Math.round(hz); st.fc = Math.round(hz); if (!st.rt) { st.rt = true; renderRt(); } sendRt(); marks(); toast(`RTTY: центр ${st.fc} Гц`); }
-    else toast('Метеофакс: настройте трансивер на 1,9 кГц ниже частоты станции (USB) — сигнал займёт 1500–2300 Гц');
+    else { $('#fxCenter').value = Math.round(hz); st.fxC = Math.round(hz); st.fxD = 400; sendFx(st.fxC); marks(); toast(`Факс: центр ${st.fxC} Гц (чёрный ${st.fxC - 400}, белый ${st.fxC + 400})`); }
   }
   function resend() {
     st.rt = store.get('rtOn', false); st.fx = store.get('fxOn', false);

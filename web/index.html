@@ -340,6 +340,8 @@
           <label class="mini">Строк/мин<select id="fxLpm"><option>60</option><option>90</option><option selected>120</option><option>240</option></select></label>
           <label class="mini">IOC<select id="fxIoc"><option selected>576</option><option>288</option></select></label>
           <label class="chk mini" title="Начинать по тону старта и заканчивать по тону стопа"><input type="checkbox" id="fxAuto" checked> авто старт/стоп</label>
+          <label class="mini" title="Середина между чёрным и белым, Гц звука (обычно 1900). Правый клик по водопаду — поставить по сигналу">Центр<input type="number" id="fxCenter" class="num" min="1000" max="2800" step="10" value="1900"></label>
+          <label class="chk mini" title="Автоподстройка центра по тону старта и фазированию"><input type="checkbox" id="fxAfc" checked> АПЧ</label>
           <button class="btn small" id="fxStart" title="Начать картинку сразу, не дожидаясь тона старта">Начать сейчас</button>
           <button class="btn small" id="fxStop" title="Закончить и сохранить картинку">Стоп и сохранить</button>
           <span class="mini">Наклон<button class="btn small" id="fxSlM" title="Shift — шаг 10">◀</button><b class="mono" id="fxSlant">0</b><button class="btn small" id="fxSlP" title="Shift — шаг 10">▶</button></span>
@@ -349,7 +351,7 @@
           <button class="btn small" id="fxPng">💾 PNG</button>
           <button class="btn small" id="fxBig" title="Во весь экран (Esc — назад)">⛶</button>
         </div>
-        <div class="fx-wrap" id="fxWrap"><button class="btn small fx-close" id="fxClose" title="Esc">✕</button><canvas id="fxCanvas"></canvas><div class="fx-empty muted" id="fxEmpty"><div>Метеофакс принимается в <b>USB/DATA-U</b> на 1,9 кГц ниже частоты станции (выберите станцию в списке — частота и вид работы поставятся сами).
+        <div class="fx-wrap" id="fxWrap"><button class="btn small fx-close" id="fxClose" title="Esc">✕</button><canvas id="fxCanvas"></canvas><div class="fx-empty muted" id="fxEmpty"><div>Метеофакс принимается в <b>USB</b> на 1,9 кГц ниже частоты станции (выберите станцию в списке — частота и вид работы поставятся сами). Полоса WIDTH — не уже 2,4 кГц: сигнал занимает 1500–2300 Гц.
           Картинка начнётся сама по тону старта. Клик по картинке — указать, где левый край карты; ◀ ▶ — исправить наклон.</div></div></div>
         <div class="muted small" id="fxSaved"></div>
       </div>

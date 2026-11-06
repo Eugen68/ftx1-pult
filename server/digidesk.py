@@ -10,7 +10,7 @@
   rt_clear
   rt_ai {text}                     -> rt_ai {ru} | rt_ai_err   (перевод через LM Studio, если есть)
   fax_hello                        -> fax_state + картинка целиком (бинарный кадр 0x06)
-  fax_dec {on, lpm, ioc, auto, slant}
+  fax_dec {on, lpm, ioc, auto, center, afc}
   fax_start | fax_stop | fax_shift {px} | fax_slant {d}
 Сервер шлёт: rt_rx {text}, rt_info {...}, fax_state, fax_info, fax_note, fax_saved {name, path},
   бинарные кадры 0x05 = строка факса: '<HH' (номер строки, ширина) + uint8[ширина],
@@ -72,6 +72,7 @@ class DigiDesk:
         f = self.fax
         return {'t': 'fax_state', 'state': f.state, 'on': f.enabled, 'rows': len(f.rows), 'W': f.W,
                 'lpm': f.lpm, 'ioc': f.ioc, 'auto': f.auto, 'slant': round(f.slant),
+                'center': round(f.center), 'dev': round(f.dev), 'afc': f.afc,
                 'saved': self.saved[-12:]}
 
     # ------------------------------------------------------------------ звук приёма
@@ -248,7 +249,10 @@ class DigiDesk:
                 self._send_whole(c)
         elif t == 'fax_dec':
             c.fax_on = bool(m.get('on'))
-            self.fax.configure(lpm=m.get('lpm'), ioc=m.get('ioc'), auto=m.get('auto'))
+            self.fax.configure(lpm=m.get('lpm'), ioc=m.get('ioc'), auto=m.get('auto'),
+                               center=m.get('center'), afc=m.get('afc'))
+            if m.get('center'):
+                self.fax.dev = 400.0
             self.update()
             c.ws.send_json(self.fax_state())
             if c.fax_on:
@@ -264,8 +268,7 @@ class DigiDesk:
             self.fax.shift_start(float(m.get('px', 0)))
         elif t == 'fax_slant':
             self.fax.configure(slant=self.fax.slant + float(m.get('d', 0)))
-            self.bc({'t': 'fax_info', 'state': self.fax.state, 'rows': len(self.fax.rows),
-                     'slant': round(self.fax.slant)}, 'fax_on')
+            self.bc(self.fax.info(), 'fax_on')
 
     async def _translate(self, c, text):
         text = (text or '').strip()[-3000:]
