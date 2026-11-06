@@ -18,11 +18,29 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
-      - run: pip install -r requirements.txt pyinstaller
+      - run: pip install -r requirements.txt
+      # Загрузчик PyInstaller собираем из исходников: готовый загрузчик из pip
+      # антивирусы (Microsoft Defender) часто ложно считают «Wacatac».
+      - name: PyInstaller с собственным загрузчиком
+        shell: pwsh
+        run: |
+          $env:PYINSTALLER_COMPILE_BOOTLOADER = '1'
+          pip install --no-binary pyinstaller --no-cache-dir pyinstaller
       - run: >
-          pyinstaller --noconfirm --clean --onefile --windowed --name FTX1-Pult
+          pyinstaller --noconfirm --clean --onefile --windowed --noupx --name FTX1-Pult
+          --version-file version_info.txt
           --icon web\icon.ico --add-data "web;web" --add-data "server\menu_ftx1.json;."
           --hidden-import pystray._win32 --paths server server\main.py
+      - name: Вариант-папка (ZIP) — реже вызывает подозрения антивируса
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --onedir --windowed --noupx --name FTX1-Pult --distpath distdir `
+            --version-file version_info.txt `
+            --icon web\icon.ico --add-data "web;web" --add-data "server\menu_ftx1.json;." `
+            --hidden-import pystray._win32 --paths server server\main.py
+          Compress-Archive -Path distdir\FTX1-Pult -DestinationPath dist\FTX1-Pult-folder.zip
+          (Get-FileHash dist\FTX1-Pult.exe -Algorithm SHA256).Hash + '  FTX1-Pult.exe' | Out-File dist\SHA256.txt
+          (Get-FileHash dist\FTX1-Pult-folder.zip -Algorithm SHA256).Hash + '  FTX1-Pult-folder.zip' | Out-File dist\SHA256.txt -Append
       - name: Самопроверка exe (библиотеки и файлы)
         shell: pwsh
         run: |
@@ -47,7 +65,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: FTX1-Pult
-          path: dist/FTX1-Pult.exe
+          path: |
+            dist/FTX1-Pult.exe
+            dist/FTX1-Pult-folder.zip
+            dist/SHA256.txt
       - name: Релиз «последняя сборка»
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -57,7 +78,14 @@ jobs:
           body: |
             Скачайте **FTX1-Pult.exe**, положите в любую папку и запустите двойным кликом.
             Python не нужен. Настройки (config.json) и журнал появятся рядом с exe.
+
+            Если Microsoft Defender ругается на exe — это ложное срабатывание на упаковщик PyInstaller.
+            Возьмите **FTX1-Pult-folder.zip**: распакуйте папку целиком и запустите FTX1-Pult.exe внутри.
+            Исходный код открыт в этом репозитории, контрольные суммы — в SHA256.txt.
             Сборка: ${{ github.sha }}
           make_latest: true
           overwrite_files: true
-          files: dist/FTX1-Pult.exe
+          files: |
+            dist/FTX1-Pult.exe
+            dist/FTX1-Pult-folder.zip
+            dist/SHA256.txt
