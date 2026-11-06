@@ -207,6 +207,56 @@ class SimTransport:
         pass
 
 
+class SimDigi:
+    """Метеостанции в эфире симулятора: телетайп DWD (10100,8 кГц, 50 Бод / 450 Гц)
+    и метеофакс DWD (3855 кГц): циклы, которые слышны при настройке на них."""
+    RTTY_F, FAX_F = 10100800, 3855000
+
+    def __init__(self):
+        self.rt = self.fx = None
+        threading.Thread(target=self._build, daemon=True).start()
+
+    def _build(self):
+        import digi
+        txt = ('\nZCZC 123\nSEEWETTERBERICHT DWD HAMBURG / FORECAST BLACK SEA:\n'
+               'WESTERN PART: SW 4 TO 5, LATER W 6, SEA 1.5 M. VIS GOOD.\n'
+               'EASTERN PART: S 3 TO 4, RAIN SHOWERS, VIS MODERATE. 73 NNNN\n')
+        f = digi.rtty_freqs(txt * 3, baud=50, shift=450, fc=0, lead=1.0)
+        self.rt = np.cumsum(2 * np.pi * f / SR)
+        self.rt_w = self.rt[-1] + 2 * np.pi * f[-1] / SR
+        # «карта»: сетка, побережье, изобары и рамка
+        H, W = 160, 600
+        yy, xx = np.mgrid[0:H, 0:W]
+        img = np.ones((H, W))
+        img[(xx % 75 < 2) | (yy % 40 < 2)] = 0.55
+        coast = 80 + 30 * np.sin(xx / 70.0) + 10 * np.sin(xx / 17.0)
+        img[np.abs(yy - coast) < 2] = 0
+        for r in (30, 50, 70):
+            d = np.hypot(xx - 380, (yy - 70) * 1.3)
+            img[np.abs(d - r) < 1.2] = 0.2
+        img[:4], img[-4:], img[:, :4], img[:, -4:] = 0, 0, 0, 0
+        v = digi.fax_values(img, phasing=20)
+        gap = np.full(int(15 * SR), 0.5)
+        v = np.concatenate([v, gap])
+        self.fx = np.cumsum(2 * np.pi * (v * 800 - 400) / SR)
+        self.fx_w = self.fx[-1]
+
+    def block(self, f0, t, n0):
+        out = np.zeros(len(t), np.float32)
+        for kind, fs, arr in (('rt', self.RTTY_F, self.rt), ('fx', self.FAX_F, self.fx)):
+            if arr is None:
+                continue
+            af = fs - f0
+            if not (300 < af < 3200):
+                continue
+            L = len(arr)
+            i = (n0 + np.arange(len(t))) % L
+            loops = (n0 + np.arange(len(t))) // L
+            ph = arr[i] + loops * (self.rt_w if kind == 'rt' else self.fx_w)
+            out += 0.02 * np.sin(2 * np.pi * af * t + ph)
+        return out
+
+
 class SimAudio:
     """«Эфир»: шум + CW + FT8-подобные тоны + SSB-подобный сигнал."""
 
@@ -217,6 +267,7 @@ class SimAudio:
         self.rx_level = 0.0
         self.n = 0
         self._stop = False
+        self.digi = SimDigi()
 
     def start(self, on_rx):
         def run():
@@ -255,6 +306,7 @@ class SimAudio:
         # «станции» на фиксированных частотах эфира: слышны, если попадают в полосу 0..3 кГц
         stations = [(14076150, 0.01, 'ft8'), (14074800, 0.008, 'ft8'),
                     (14075700, 0.012, 'ft8'), (14077100, 0.015, 'ssb'), (SimCwOp.FREQ, 0.012, 'op')]
+        x += self.digi.block(f0, t, self.n - BLOCK)
         cwop = self.radio.cwop
         cwop.tick()
         tm = time.monotonic() + np.arange(BLOCK) / SR

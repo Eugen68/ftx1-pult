@@ -81,7 +81,7 @@ class CwDesk:
         p = self.proposal
         if not p:
             return None
-        return {'text': p['text'], 'ru': p['ru'], 'left': max(0, round(p['deadline'] - time.monotonic(), 1)), 'auto': p['auto']}
+        return {'text': p['text'], 'ru': p['ru'], 'model': p.get('model', ''), 'left': max(0, round(p['deadline'] - time.monotonic(), 1)), 'auto': p['auto']}
 
     # ------------------------------------------------------------------ декодер
     def update_decoder(self):
@@ -135,10 +135,22 @@ class CwDesk:
         self.history.append(item)
         self.history = self.history[-40:]
         self.bc({'t': 'cw_over', 'item': item})
-        if self.cfg.get('ai_enabled', True) and (self.cfg.get('ai_auto_analyze', True) or self.auto_on()):
+        if self.cfg.get('ai_auto_analyze', True) or self.auto_on():
             await self.analyze(item)
 
-    # ------------------------------------------------------------------ ИИ
+    # ------------------------------------------------------------------ ИИ (с запасным вариантом без него)
+    def _ai_failed(self, e):
+        """LM Studio недоступна — работаем по правилам; тост не чаще раза в 2 минуты."""
+        now = time.monotonic()
+        msg = str(e) if isinstance(e, ai.AiError) else 'Ошибка ИИ: %s' % e
+        self.ai_note = 'ИИ недоступен — разбор по правилам'
+        if now - getattr(self, 'ai_err_t', -1e9) > 120:
+            self.ai_err_t = now
+            self.bc({'t': 'cw_ai_err', 'msg': msg + ' Пока работаю без ИИ — по правилам CW-связи.'})
+
+    def _use_lm(self):
+        return bool(self.cfg.get('ai_enabled', True))
+
     async def analyze(self, item=None, client=None):
         if self.ai_busy:
             return
@@ -147,29 +159,35 @@ class CwDesk:
             if client:
                 client.ws.send_json({'t': 'cw_note', 'msg': 'Пока нечего разбирать — нет принятого текста'})
             return
-        self.ai_busy = True
-        self.bc({'t': 'cw_ai_busy', 'on': True, 'what': 'Разбираю принятое…'})
         hist = [h for h in self.history if h is not item]
-        try:
-            res = await asyncio.to_thread(ai.analyze, self.lm(), item['text'], hist, self.op())
-            item['clean'] = res.get('clean') or item['text']
-            res['raw'] = item['text']
-            my = (self.cfg.get('my_call') or '').upper()
-            res['calls_me_strict'] = bool(my) and (ai.calls_me_strict(item['text'], my) or
-                                                    my in item['text'].upper().replace(' ', ''))
-            self.analysis = res
-            self.bc({'t': 'cw_ai', 'a': res})
-        except ai.AiError as e:
-            self.bc({'t': 'cw_ai_err', 'msg': str(e)})
-            return
-        except Exception as e:
-            log.exception("ИИ: ошибка разбора")
-            self.bc({'t': 'cw_ai_err', 'msg': 'Ошибка ИИ: %s' % e})
-            return
-        finally:
-            self.ai_busy = False
-            self.bc({'t': 'cw_ai_busy', 'on': False})
-        # автоответ — только при двойной проверке: модель И наличие позывного в сырых данных
+        res = None
+        if self._use_lm():
+            self.ai_busy = True
+            self.bc({'t': 'cw_ai_busy', 'on': True, 'what': 'Разбираю принятое…'})
+            try:
+                res = await asyncio.to_thread(ai.analyze, self.lm(), item['text'], hist, self.op())
+            except Exception as e:
+                if not isinstance(e, ai.AiError):
+                    log.exception("ИИ: ошибка разбора")
+                self._ai_failed(e)
+            finally:
+                self.ai_busy = False
+                self.bc({'t': 'cw_ai_busy', 'on': False})
+        if res is None:
+            res = ai.analyze_rules(item['text'], hist, self.op())
+            if self._use_lm():
+                res['note'] = 'LM Studio недоступна — разобрано по правилам'
+        item['clean'] = res.get('clean') or item['text']
+        for k in ('call', 'name', 'qth'):
+            if res.get(k):
+                item[k] = res[k]
+        res['raw'] = item['text']
+        my = (self.cfg.get('my_call') or '').upper()
+        res['calls_me_strict'] = bool(my) and (ai.calls_me_strict(item['text'], my) or
+                                                my in item['text'].upper().replace(' ', ''))
+        self.analysis = res
+        self.bc({'t': 'cw_ai', 'a': res})
+        # автоответ — только при двойной проверке: разбор И наличие позывного в сырых данных
         if self.auto_on():
             if not self.cfg.get('my_call'):
                 self.bc({'t': 'cw_note', 'msg': 'Автоответ: укажите свой позывной'})
@@ -182,26 +200,27 @@ class CwDesk:
     async def make_reply(self, task='', auto=False, client=None):
         if self.ai_busy:
             return
-        self.ai_busy = True
-        self.bc({'t': 'cw_ai_busy', 'on': True, 'what': 'Составляю ответ…'})
-        try:
-            res = await asyncio.to_thread(ai.reply, self.lm(), self.history, self.analysis, self.op(), task)
-        except ai.AiError as e:
-            self.bc({'t': 'cw_ai_err', 'msg': str(e)})
-            return
-        except Exception as e:
-            log.exception("ИИ: ошибка ответа")
-            self.bc({'t': 'cw_ai_err', 'msg': 'Ошибка ИИ: %s' % e})
-            return
-        finally:
-            self.ai_busy = False
-            self.bc({'t': 'cw_ai_busy', 'on': False})
+        res = None
+        if self._use_lm():
+            self.ai_busy = True
+            self.bc({'t': 'cw_ai_busy', 'on': True, 'what': 'Составляю ответ…'})
+            try:
+                res = await asyncio.to_thread(ai.reply, self.lm(), self.history, self.analysis, self.op(), task)
+            except Exception as e:
+                if not isinstance(e, ai.AiError):
+                    log.exception("ИИ: ошибка ответа")
+                self._ai_failed(e)
+            finally:
+                self.ai_busy = False
+                self.bc({'t': 'cw_ai_busy', 'on': False})
+        if res is None or not clean_tx_text(res.get('text', '')):
+            res = ai.reply_rules(self.history, self.analysis, self.op())
         text = clean_tx_text(res['text'])[:250]
         if not text:
-            self.bc({'t': 'cw_ai_err', 'msg': 'ИИ вернул пустой ответ'})
+            self.bc({'t': 'cw_note', 'msg': res.get('ru') or 'Отвечать нечего'})
             return
         delay = max(3, int(self.cfg.get('cw_auto_delay', 6)))
-        self.proposal = {'text': text, 'ru': res.get('ru', ''), 'auto': auto,
+        self.proposal = {'text': text, 'ru': res.get('ru', ''), 'auto': auto, 'model': res.get('model', ''),
                          'deadline': time.monotonic() + (delay if auto else 1e9)}
         self.bc({'t': 'cw_proposal', 'p': self._proposal_public()})
 

@@ -41,8 +41,9 @@ from cat import Rig, SerialTransport, SerialPtt, CTCSS  # noqa: E402
 from audio import SR, Decimator, Interpolator, Waterfall  # noqa: E402
 from webserver import WebServer  # noqa: E402
 from cwdesk import CwDesk  # noqa: E402
+from digidesk import DigiDesk  # noqa: E402
 
-VERSION = "1.7"
+VERSION = "1.8"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -305,6 +306,7 @@ class Station:
         with open(os.path.join(RES, 'menu_ftx1.json'), encoding='utf-8') as f:
             self.menu = json.load(f)
         self.cw = CwDesk(self)
+        self.digi = DigiDesk(self, BASE)
         LOGBUF.listeners.append(self._on_log)
 
     def save_cfg(self):
@@ -377,6 +379,7 @@ class Station:
         if not self.running:
             return
         self.cw.stop()
+        self.digi.stop()
         if self.ptt_owner:
             self.set_ptt(None, False)
             await asyncio.sleep(0.15)
@@ -422,6 +425,7 @@ class Station:
                         n = min(len(row), int(c.wf_max / self.wf.bin_hz) + 1)
                         c.ws.send_bin(b'\x02' + struct.pack('<Hf', n, self.wf.bin_hz) + row[:n].tobytes())
         self.cw.feed(x)
+        self.digi.feed(x)
 
     def _on_rig_change(self, diff):
         self.broadcast({'t': 'state', 's': diff})
@@ -450,6 +454,9 @@ class Station:
                 client.ws.send_json({'t': 'note', 'msg': 'Сервер не подключён к трансиверу'})
             return
         if on:
+            if self.digi.tx_busy or self.cw.sender.busy:
+                client.ws.send_json({'t': 'note', 'msg': 'Идёт передача RTTY/CW — дождитесь окончания'})
+                return
             if self.ptt_owner not in (None, client):
                 client.ws.send_json({'t': 'note', 'msg': 'Передача занята другим клиентом (%s)' % self.ptt_owner.name})
                 return
@@ -627,6 +634,7 @@ class Station:
             if c.console and self.rig:
                 self.rig.remove_raw_listener(c.console)
             self.cw.client_gone(c)
+            self.digi.client_gone(c)
             if c.authed and not c.admin:
                 log.info("Отключился %s", c.name)
                 self.push_status()
@@ -674,6 +682,9 @@ class Station:
             return
         if t.startswith('cw_'):
             await self.cw.on_msg(c, m)
+            return
+        if t.startswith('rt_') or t.startswith('fax_'):
+            await self.digi.on_msg(c, m)
             return
         if t == 'audio':
             c.audio = bool(m.get('on'))
@@ -903,6 +914,20 @@ def selftest(path):
         good = os.path.isfile(p)
         ok &= good
         rep.append(('OK   ' if good else 'FAIL ') + 'web/' + f)
+    try:                                     # цифровые виды: RTTY «сам на себя»
+        import digi
+        got = []
+        d = digi.RttyDecoder(lambda e: got.append(e.get('text', '')) if e['t'] == 'rt_rx' else None)
+        d.configure(enabled=True, baud=45.45, shift=170, fc=2210)
+        x = digi.rtty_afsk('RYRY CQ TEST DE R6AAF K', fc=2210)
+        for i in range(0, len(x), 960):
+            d.process(x[i:i + 960])
+        good = 'R6AAF' in ''.join(got)
+        ok &= good
+        rep.append(('OK   ' if good else 'FAIL ') + 'rtty loopback: ' + ''.join(got).strip()[:40])
+    except Exception as e:
+        ok = False
+        rep.append('FAIL rtty: %s' % e)
     good = os.path.isfile(os.path.join(RES, 'menu_ftx1.json'))
     ok &= good
     rep.append(('OK   ' if good else 'FAIL ') + 'menu_ftx1.json')

@@ -121,6 +121,7 @@
       <button data-tab="tx">Передача</button>
       <button data-tab="vfo">VFO/Память</button>
       <button data-tab="cw">CW · Морзе</button>
+      <button data-tab="digi">RTTY · Факс</button>
       <button data-tab="menu">Меню</button>
       <button data-tab="cat">CAT</button>
       <button data-tab="opts">Настройки</button>
@@ -238,9 +239,9 @@
           <span class="muted small" id="cwAiStatus">LM Studio: не проверено</span>
           <span class="spacer"></span>
           <button class="btn small" id="cwAnalyze" title="Разобрать последнее принятое (клавиша I)">Разобрать</button>
-          <button class="btn small" id="cwReply" title="ИИ составит ответ корреспонденту (клавиша Y)">✨ Ответ ИИ</button>
+          <button class="btn small" id="cwReply" title="Составить ответ корреспонденту: ИИ или шаблон, если LM Studio нет (клавиша Y)">✨ Ответ</button>
         </div>
-        <div id="cwAiBody" class="cw-ai-body muted small">Принятое после паузы разбирает языковая модель в LM Studio: исправляет ошибки декодера, переводит и выделяет позывной, RST, имя и QTH.</div>
+        <div id="cwAiBody" class="cw-ai-body muted small">Принятое после паузы разбирается: позывной, RST, имя, QTH, перевод сокращений. С LM Studio — точнее (модель исправляет ошибки декодера); без неё — по правилам CW-связи.</div>
       </div>
 
       <!-- ===== Передача ===== -->
@@ -291,6 +292,67 @@
       <div id="cwMems" class="cw-mems"></div>
       <p class="muted small">Текст передаёт сам трансивер из своей памяти ключа (до 50 знаков за раз) — без задержек сети. BREAK-IN включается автоматически.
         Длинный текст передаётся кусками через ячейку 5.</p>
+    </div>
+
+    <div class="tab" id="tab-digi">
+      <div class="dg-head">
+        <div class="seg" id="dgSw"><button data-v="rtty" class="on">RTTY · телетайп</button><button data-v="fax">WEFAX · метеофакс</button></div>
+        <span class="muted small" id="dgHint">Правый клик по водопаду — настроить декодер на сигнал</span>
+      </div>
+
+      <!-- ===== RTTY ===== -->
+      <div id="dgRtty">
+        <div class="cw-bar">
+          <button class="btn" id="rtDecBtn">○ Декодер выкл</button>
+          <label class="mini">Скорость<select id="rtBaud"><option>45.45</option><option>50</option><option>75</option><option>100</option></select></label>
+          <label class="mini">Сдвиг<select id="rtShift"><option>170</option><option>200</option><option>425</option><option>450</option><option>850</option></select></label>
+          <label class="mini" title="Середина между тонами mark и space, Гц звука">Центр<input type="number" id="rtFc" class="num" min="500" max="2900" step="5" value="2210"></label>
+          <button class="btn small" id="rtTune" title="Найти пару тонов RTTY в полосе приёма">Автонастройка</button>
+          <label class="mini" title="Авто — декодер сам определяет, перевёрнуты ли тоны (LSB/USB, «реверс»)">Полярность<select id="rtPol"><option value="0">авто</option><option value="1">прямая</option><option value="-1">обратная</option></select></label>
+          <label class="chk mini" title="Unshift on space: после пробела — буквы"><input type="checkbox" id="rtUsos" checked> USOS</label>
+          <span class="cw-meter mono" id="rtInfo">—</span>
+          <span class="spacer"></span>
+          <label class="mini">Станция<select id="rtPreset"></select></label>
+          <button class="btn small" id="rtClear">Очистить</button>
+          <button class="btn small" id="rtAiBtn" title="Перевести и объяснить принятое (нужна LM Studio)">Перевести (ИИ)</button>
+        </div>
+        <div class="cw-screen dg-screen mono" id="rtScreen"><span class="muted" id="rtHintS">Включите декодер и настройтесь на телетайп. Метеосводки DWD (Германия): 50 Бод, сдвиг 450 Гц — выберите станцию в списке справа. Любительский RTTY: 45,45 Бод / 170 Гц, около 14080–14090 кГц.</span></div>
+        <div class="cw-ai hidden" id="rtAi"><div class="cw-ai-head"><b>Перевод</b><span class="muted small" id="rtAiModel"></span><span class="spacer"></span><button class="btn small" id="rtAiClose">✕</button></div><div class="cw-ai-body small" id="rtAiBody"></div></div>
+        <div class="cw-tx">
+          <div class="cw-macros" id="rtMacros"></div>
+          <div class="cw-txrow">
+            <textarea id="rtText" class="mono" rows="2" placeholder="Текст для передачи RTTY (Ctrl+Enter — передать). {MY} — ваш позывной"></textarea>
+            <div class="cw-txbtns">
+              <button class="btn primary" id="rtSend" title="Ctrl+Enter">▶ Передать</button>
+              <button class="btn" id="rtStop" title="Esc">■ Стоп</button>
+            </div>
+          </div>
+          <div class="cw-txline mono hidden" id="rtTxLine"></div>
+          <p class="muted small">Передача — звуком через USB (AFSK), трансивер должен быть в режиме <b>DATA-L</b> или <b>DATA-U</b>.
+            Тоны ставятся по любительскому стандарту (mark — верхняя частота в эфире); если корреспондент не читает — <label class="chk"><input type="checkbox" id="rtRev"> реверс</label>.</p>
+        </div>
+      </div>
+
+      <!-- ===== WEFAX ===== -->
+      <div id="dgFax" class="hidden">
+        <div class="cw-bar">
+          <button class="btn" id="fxDecBtn">○ Приём выкл</button>
+          <label class="mini">Строк/мин<select id="fxLpm"><option>60</option><option>90</option><option selected>120</option><option>240</option></select></label>
+          <label class="mini">IOC<select id="fxIoc"><option selected>576</option><option>288</option></select></label>
+          <label class="chk mini" title="Начинать по тону старта и заканчивать по тону стопа"><input type="checkbox" id="fxAuto" checked> авто старт/стоп</label>
+          <button class="btn small" id="fxStart" title="Начать картинку сразу, не дожидаясь тона старта">Начать сейчас</button>
+          <button class="btn small" id="fxStop" title="Закончить и сохранить картинку">Стоп и сохранить</button>
+          <span class="mini">Наклон<button class="btn small" id="fxSlM" title="Shift — шаг 10">◀</button><b class="mono" id="fxSlant">0</b><button class="btn small" id="fxSlP" title="Shift — шаг 10">▶</button></span>
+          <span class="cw-meter mono" id="fxInfo">—</span>
+          <span class="spacer"></span>
+          <label class="mini">Станция<select id="fxPreset"></select></label>
+          <button class="btn small" id="fxPng">💾 PNG</button>
+          <button class="btn small" id="fxBig" title="Во весь экран (Esc — назад)">⛶</button>
+        </div>
+        <div class="fx-wrap" id="fxWrap"><button class="btn small fx-close" id="fxClose" title="Esc">✕</button><canvas id="fxCanvas"></canvas><div class="fx-empty muted" id="fxEmpty"><div>Метеофакс принимается в <b>USB/DATA-U</b> на 1,9 кГц ниже частоты станции (выберите станцию в списке — частота и вид работы поставятся сами).
+          Картинка начнётся сама по тону старта. Клик по картинке — указать, где левый край карты; ◀ ▶ — исправить наклон.</div></div></div>
+        <div class="muted small" id="fxSaved"></div>
+      </div>
     </div>
 
     <div class="tab" id="tab-menu">

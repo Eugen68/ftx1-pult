@@ -105,7 +105,7 @@ function connect() {
         $('#srvInfo').textContent = `Сервер v${m.version}. PTT: ${m.ptt_method}. Ограничение передачи: ${m.max_tx} с.` + (m.audio_err ? ` ЗВУК: ${m.audio_err}` : '');
         setWfMsg(m.audio_err);
         updateSpan(true);
-        send({ t: 'cw_hello' }); cwDesk.resend();
+        send({ t: 'cw_hello' }); cwDesk.resend(); digiDesk.resend();
         if (C.audioOn) send({ t: 'audio', on: true, rate: C.rate });
         break;
       case 'auth_fail':
@@ -123,7 +123,9 @@ function connect() {
       case 'raw': catLine(m.line); break;
       case 'menu_list': buildMenu(m.items); break;
       case 'menu_val': setMenuVal(m.ex, m.v); break;
-      default: if (m.t && m.t.startsWith('cw_')) cwDesk.on(m);
+      default:
+        if (m.t && m.t.startsWith('cw_')) cwDesk.on(m);
+        else if (m.t && (m.t.startsWith('rt_') || m.t.startsWith('fax_'))) digiDesk.on(m);
     }
   };
 }
@@ -140,6 +142,8 @@ function onBinary(b) {
     const dv = new DataView(b.buffer);
     const n = dv.getUint16(1, true), binHz = dv.getFloat32(3, true);
     wfRow(b.subarray(7, 7 + n), binHz);
+  } else if (type === 5 || type === 6) {
+    digiDesk.onBin(b);
   }
 }
 
@@ -571,6 +575,10 @@ function drawOverlay() {
     ctx.strokeStyle = '#3ddc84'; ctx.setLineDash([2 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath(); ctx.moveTo(X(C.cwMark), 0); ctx.lineTo(X(C.cwMark), H); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = dpr;
   }
+  for (const [hz, col] of (C.dgMarks || [])) {    // RTTY mark/space, факс чёрный/белый
+    ctx.strokeStyle = col; ctx.setLineDash([3 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath(); ctx.moveTo(X(hz), 0); ctx.lineTo(X(hz), H); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = dpr;
+  }
   if (S.notch) { ctx.strokeStyle = '#ff7ad9'; ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.beginPath(); ctx.moveTo(X(S.notch_freq), 0); ctx.lineTo(X(S.notch_freq), H); ctx.stroke(); ctx.setLineDash([]); }
   // шкала: Гц звука + частота в эфире
   const stepK = span <= 4000 ? 500 : span <= 6000 ? 1000 : span <= 12000 ? 2000 : 4000;
@@ -605,7 +613,8 @@ function tuneToAudio(a) {
   w.addEventListener('pointerleave', () => { cur.style.display = 'none'; });
   w.addEventListener('dblclick', e => tuneToAudio(aAt(e)));
   w.addEventListener('contextmenu', e => {            // правый клик — декодер CW слушает эту частоту
-    e.preventDefault(); cwDesk.setFreq(Math.round(aAt(e)));
+    e.preventDefault();
+    if (C.tab === 'digi') digiDesk.setFreq(Math.round(aAt(e))); else cwDesk.setFreq(Math.round(aAt(e)));
   });
   let lastTap = 0;
   w.addEventListener('pointerup', e => {           // двойной тап на телефоне
@@ -794,6 +803,7 @@ $$('#tabs button').forEach(b => b.onclick = () => {
   $$('#tabs button').forEach(x => x.classList.toggle('on', x === b));
   $$('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + b.dataset.tab));
   if (b.dataset.tab === 'menu' && !menu.items) send({ t: 'menu_list' });
+  C.tab = b.dataset.tab;
   store.set('tab', b.dataset.tab);
 });
 
@@ -1040,7 +1050,8 @@ const cwDesk = (() => {
     clearInterval(st.propTimer);
     $('#cwProposal').classList.toggle('hidden', !p);
     if (!p) return;
-    $('#cwPropTitle').textContent = p.auto ? 'Автоответ ИИ' : 'Ответ ИИ';
+    const tpl = p.model === 'шаблон';
+    $('#cwPropTitle').textContent = (p.auto ? 'Автоответ' : 'Ответ') + (tpl ? ' (шаблон)' : ' ИИ');
     $('#cwPropText').textContent = p.text; $('#cwPropRu').textContent = p.ru || '';
     const end = performance.now() + p.left * 1000;
     const tick = () => {
@@ -1148,8 +1159,8 @@ const cwDesk = (() => {
       case 'cw_new': scr.innerHTML = ''; cur = null; renderAnalysis(null); st.lastCall = ''; toast('Новая связь'); break;
       case 'cw_dec': break;
       case 'cw_ai_busy': aiStatus(m.on ? m.what : (st.aiOk ? 'LM Studio: готов' : 'LM Studio'), false); $('#cwAiStatus').classList.toggle('cw-busy', m.on); break;
-      case 'cw_ai': renderAnalysis(m.a); aiStatus('LM Studio: готов · ' + (m.a.model || '')); break;
-      case 'cw_ai_err': aiStatus(m.msg, true); toast(m.msg, 5000); break;
+      case 'cw_ai': renderAnalysis(m.a); aiStatus(m.a.note ? m.a.note : (m.a.model === 'правила (без ИИ)' ? 'Разбор по правилам (ИИ выключен)' : 'LM Studio: готов · ' + (m.a.model || '')), !!m.a.note); break;
+      case 'cw_ai_err': aiStatus('ИИ недоступен — работаю по правилам', true); toast(m.msg, 6000); break;
       case 'cw_ai_test':
         st.aiOk = m.ok;
         aiStatus(m.ok ? `LM Studio: готов · ${m.model || m.models[0] || 'модель не загружена'}` : m.msg, !m.ok);
@@ -1170,6 +1181,254 @@ const cwDesk = (() => {
   }
   function resend() { if (store.get('cwDec', false)) { st.dec = true; sendDec(); } renderDec(); }
   return { on, toggle, setFreq, stop, resend };
+})();
+
+// ------------------------------------------------------------------ RTTY и метеофакс
+const digiDesk = (() => {
+  const st = { sub: store.get('dgSub', 'rtty'), rt: false, fx: false, fc: 2210, shift: 170, baud: 45.45,
+    rows: [], W: 1809, fxState: 'idle', txText: '', slant: 0 };
+  const scr = $('#rtScreen'), cv = $('#fxCanvas'), wrap = $('#fxWrap');
+  const RT_PRESETS = [
+    ['', '— выбрать —'],
+    ['ham', 'Любители 45,45 Бод / 170 Гц', { baud: 45.45, shift: 170 }],
+    ['dwd1', 'DWD метео 4583 кГц (50/450)', { baud: 50, shift: 450, f: 4583000 }],
+    ['dwd2', 'DWD метео 7646 кГц (50/450)', { baud: 50, shift: 450, f: 7646000 }],
+    ['dwd3', 'DWD метео 10100,8 кГц (50/450)', { baud: 50, shift: 450, f: 10100800 }],
+    ['dwd4', 'DWD метео 11039 кГц (50/450)', { baud: 50, shift: 450, f: 11039000 }],
+    ['dwd5', 'DWD метео 14467,3 кГц (50/450)', { baud: 50, shift: 450, f: 14467300 }],
+  ];
+  const FX_PRESETS = [
+    ['', '— выбрать —'],
+    ['d1', 'DWD Пиннеберг 3855 кГц', 3855000], ['d2', 'DWD Пиннеберг 7880 кГц', 7880000],
+    ['d3', 'DWD Пиннеберг 13882,5 кГц', 13882500],
+  ];
+  const fill = (sel, list) => { sel.innerHTML = list.map(p => `<option value="${p[0]}">${p[1]}</option>`).join(''); };
+  fill($('#rtPreset'), RT_PRESETS); fill($('#fxPreset'), FX_PRESETS);
+
+  // ---- переключатель RTTY / факс
+  function renderSub() {
+    $$('#dgSw button').forEach(b => b.classList.toggle('on', b.dataset.v === st.sub));
+    $('#dgRtty').classList.toggle('hidden', st.sub !== 'rtty');
+    $('#dgFax').classList.toggle('hidden', st.sub !== 'fax');
+  }
+  $$('#dgSw button').forEach(b => b.onclick = () => { st.sub = b.dataset.v; store.set('dgSub', st.sub); renderSub(); marks(); });
+  renderSub();
+
+  // ---- метки на водопаде
+  function marks() {
+    const m = [];
+    const rt = st.rt && (st.sub === 'rtty' || !st.fx), fx = st.fx && (st.sub === 'fax' || !st.rt);
+    if (rt) { m.push([st.fc - st.shift / 2, '#ffb547'], [st.fc + st.shift / 2, '#4fc3ff']); }
+    if (fx) { m.push([1500, '#bbbbbb'], [2300, '#ffffff']); }
+    C.dgMarks = m; drawOverlay();
+  }
+
+  // ================= RTTY
+  function sendRt(extra = {}) {
+    send({ t: 'rt_dec', on: st.rt, baud: +$('#rtBaud').value, shift: +$('#rtShift').value, fc: +$('#rtFc').value,
+      pol: +$('#rtPol').value, usos: $('#rtUsos').checked, ...extra });
+  }
+  function renderRt() {
+    $('#rtDecBtn').classList.toggle('on', st.rt);
+    $('#rtDecBtn').textContent = st.rt ? '● Декодер вкл' : '○ Декодер выкл';
+  }
+  $('#rtDecBtn').onclick = () => { st.rt = !st.rt; store.set('rtOn', st.rt); renderRt(); sendRt(); marks(); };
+  ['#rtBaud', '#rtShift', '#rtFc', '#rtPol', '#rtUsos'].forEach(id => $(id).onchange = () => {
+    store.set('rtCfg', { baud: $('#rtBaud').value, shift: $('#rtShift').value, fc: $('#rtFc').value, pol: $('#rtPol').value });
+    st.fc = +$('#rtFc').value; st.shift = +$('#rtShift').value; sendRt(); marks();
+  });
+  const saved = store.get('rtCfg', null);
+  if (saved) { $('#rtBaud').value = saved.baud; $('#rtShift').value = saved.shift; $('#rtFc').value = saved.fc; $('#rtPol').value = saved.pol; }
+  st.fc = +$('#rtFc').value; st.shift = +$('#rtShift').value;
+  $('#rtTune').onclick = () => { if (!st.rt) { st.rt = true; renderRt(); sendRt(); setTimeout(() => send({ t: 'rt_autotune' }), 2500); toast('Слушаю 2 с…'); } else send({ t: 'rt_autotune' }); };
+  $('#rtClear').onclick = () => { scr.textContent = ''; };
+  $('#rtPreset').onchange = e => {
+    const p = RT_PRESETS.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
+    $('#rtBaud').value = String(p[2].baud); $('#rtShift').value = String(p[2].shift);
+    st.shift = p[2].shift; st.fc = +$('#rtFc').value;
+    if (p[2].f) {                                   // частота станции — середина между тонами; ставим её на центр декодера
+      setParam('mode', 'DATA-U'); setFreq(Math.round((p[2].f - st.fc) / 10) * 10);
+      toast(`DATA-U, ${(p[2].f / 1000).toFixed(1)} кГц на центре ${st.fc} Гц. Расписание станций меняется — сверяйтесь со свежим.`, 6000);
+    }
+    if (!st.rt) { st.rt = true; renderRt(); }
+    sendRt(); marks(); e.target.value = '';
+  };
+  function addText(t) {
+    $('#rtHintS')?.remove();
+    const end = scr.scrollTop + scr.clientHeight >= scr.scrollHeight - 30;
+    scr.append(t.replace(/\r/g, ''));
+    if (scr.textContent.length > 30000) scr.textContent = scr.textContent.slice(-20000);
+    if (end) scr.scrollTop = scr.scrollHeight;
+  }
+  $('#rtAiBtn').onclick = () => {
+    const t = scr.textContent.trim(); if (!t) return toast('Пока нечего переводить');
+    $('#rtAi').classList.remove('hidden'); $('#rtAiBody').textContent = 'Перевожу…'; $('#rtAiModel').textContent = '';
+    send({ t: 'rt_ai', text: t.slice(-3000) });
+  };
+  $('#rtAiClose').onclick = () => $('#rtAi').classList.add('hidden');
+  // передача
+  const myCall = () => ($('#opCall').value || '').toUpperCase();
+  const RT_MACROS = [['CQ', 'RYRYRY CQ CQ CQ DE {MY} {MY} {MY} PSE K'], ['RYRY', 'RYRYRYRYRYRYRYRYRY'],
+    ['DE', 'DE {MY} {MY} K'], ['73', 'TNX FER QSO 73 GL DE {MY} SK']];
+  $('#rtMacros').innerHTML = RT_MACROS.map((m, i) => `<button class="btn" data-i="${i}">${m[0]}</button>`).join('');
+  $$('#rtMacros button').forEach(b => b.onclick = () => {
+    const t = RT_MACROS[+b.dataset.i][1];
+    if (t.includes('{MY}') && !myCall()) { toast('Укажите свой позывной на вкладке CW · Морзе'); return; }
+    rtSend(t);
+  });
+  function rtSend(t) {
+    t = (t || '').replace(/\{MY\}/g, myCall()).toUpperCase().trim();
+    if (!t) return;
+    send({ t: 'rt_send', text: '\n' + t + '\n', reverse: $('#rtRev').checked });
+  }
+  $('#rtSend').onclick = () => rtSend($('#rtText').value);
+  $('#rtStop').onclick = () => send({ t: 'rt_stop' });
+  $('#rtText').addEventListener('keydown', e => { if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); rtSend($('#rtText').value); } });
+  function txProgress(p) {
+    const el = $('#rtTxLine'), t = st.txText;
+    el.innerHTML = `<span class="done">${esc(t.slice(0, p))}</span>${esc(t.slice(p))}`;
+  }
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  // ================= факс
+  const ctx = cv.getContext('2d');
+  let rowImg = null;
+  function setW(W) {
+    if (W === st.W && cv.width === W) return;
+    st.W = W; cv.width = W; redraw();
+  }
+  function redraw() {
+    const n = st.rows.length;
+    cv.width = st.W; cv.height = Math.max(1, n);
+    if (!n) { $('#fxEmpty').classList.remove('hidden'); return; }
+    $('#fxEmpty').classList.add('hidden');
+    const img = ctx.createImageData(st.W, n), d = img.data;
+    for (let y = 0; y < n; y++) {
+      const r = st.rows[y], o = y * st.W * 4;
+      for (let x = 0; x < st.W; x++) { const v = r[x], k = o + x * 4; d[k] = d[k + 1] = d[k + 2] = v; d[k + 3] = 255; }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  function addRow(i, r) {
+    const n = st.rows.length;
+    if (i < n) st.rows.length = i;                 // сервер начал заново
+    st.rows.push(r);
+    if (st.rows.length === 1 || cv.width !== r.length) { st.W = r.length; redraw(); return; }
+    // растим холст порциями, чтобы не перерисовывать каждую строку
+    if (cv.height < st.rows.length) {
+      const keep = ctx.getImageData(0, 0, cv.width, cv.height);
+      cv.height = st.rows.length + 60; ctx.fillStyle = '#0b1117'; ctx.fillRect(0, 0, cv.width, cv.height); ctx.putImageData(keep, 0, 0);
+    }
+    if (!rowImg || rowImg.width !== r.length) rowImg = ctx.createImageData(r.length, 1);
+    const d = rowImg.data;
+    for (let x = 0; x < r.length; x++) { const k = x * 4; d[k] = d[k + 1] = d[k + 2] = r[x]; d[k + 3] = 255; }
+    ctx.putImageData(rowImg, 0, st.rows.length - 1);
+    $('#fxEmpty').classList.add('hidden');
+    const end = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 40;
+    if (end) wrap.scrollTop = wrap.scrollHeight;
+  }
+  function sendFx() { send({ t: 'fax_dec', on: st.fx, lpm: +$('#fxLpm').value, ioc: +$('#fxIoc').value, auto: $('#fxAuto').checked }); }
+  function renderFx() {
+    $('#fxDecBtn').classList.toggle('on', st.fx);
+    $('#fxDecBtn').textContent = st.fx ? '● Приём вкл' : '○ Приём выкл';
+  }
+  $('#fxDecBtn').onclick = () => { st.fx = !st.fx; store.set('fxOn', st.fx); renderFx(); sendFx(); marks(); };
+  ['#fxLpm', '#fxIoc', '#fxAuto'].forEach(id => $(id).onchange = sendFx);
+  $('#fxStart').onclick = () => { if (!st.fx) { st.fx = true; renderFx(); sendFx(); marks(); } st.rows = []; redraw(); send({ t: 'fax_start' }); };
+  $('#fxStop').onclick = () => send({ t: 'fax_stop' });
+  const slant = (e, s) => send({ t: 'fax_slant', d: s * (e.shiftKey ? 10 : 50) });
+  $('#fxSlM').onclick = e => slant(e, -1); $('#fxSlP').onclick = e => slant(e, 1);
+  $('#fxPreset').onchange = e => {
+    const p = FX_PRESETS.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
+    setParam('mode', 'DATA-U'); setFreq(p[2] - 1900);
+    $('#fxLpm').value = '120'; $('#fxIoc').value = '576';
+    if (!st.fx) { st.fx = true; renderFx(); }
+    sendFx(); marks();
+    toast(`DATA-U ${((p[2] - 1900) / 1000).toFixed(1)} кГц (на 1,9 кГц ниже ${(p[2] / 1000).toFixed(1)}). Ждём тон старта — карты идут по расписанию DWD.`, 6000);
+    e.target.value = '';
+  };
+  cv.addEventListener('click', e => {               // клик — здесь левый край карты
+    const r = cv.getBoundingClientRect(), px = Math.round((e.clientX - r.left) / r.width * st.W);
+    if (!st.rows.length) return;
+    send({ t: 'fax_shift', px });
+    st.rows = st.rows.map(row => { const o = new Uint8Array(row.length); o.set(row.subarray(px)); o.set(row.subarray(0, px), row.length - px); return o; });
+    redraw(); toast('Край карты сдвинут');
+  });
+  $('#fxPng').onclick = () => {
+    if (!st.rows.length) return toast('Картинки пока нет');
+    const a = document.createElement('a');
+    const d = new Date(), z = n => String(n).padStart(2, '0');
+    a.download = `fax_${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}.png`;
+    const c2 = document.createElement('canvas'); c2.width = st.W; c2.height = st.rows.length;
+    c2.getContext('2d').drawImage(cv, 0, 0);
+    a.href = c2.toDataURL('image/png'); a.click();
+  };
+  $('#fxBig').onclick = () => { wrap.classList.toggle('big'); };
+  $('#fxClose').onclick = () => wrap.classList.remove('big');
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && wrap.classList.contains('big')) wrap.classList.remove('big'); });
+  const FX_ST = { idle: 'ждёт тон старта', phasing: 'фазирование…', image: 'приём карты' };
+
+  // ================= сообщения
+  function on(m) {
+    switch (m.t) {
+      case 'rt_state':
+        st.fc = m.fc; st.shift = m.shift; st.baud = m.baud;
+        $('#rtFc').value = m.fc; $('#rtShift').value = String(m.shift); $('#rtBaud').value = String(m.baud);
+        marks(); break;
+      case 'rt_rx': addText(m.text); break;
+      case 'rt_info':
+        $('#rtInfo').textContent = `${m.fc} Гц · ${m.shift}/${m.baud} · ${m.pol} · ошибок ${m.err}%`;
+        if (m.fc !== st.fc) { st.fc = m.fc; marks(); }
+        break;
+      case 'rt_note': toast(m.msg, 5000); break;
+      case 'rt_tx_start':
+        st.txText = m.text.trim(); $('#rtTxLine').classList.remove('hidden'); txProgress(0);
+        addText('\n» ' + st.txText + '\n'); break;
+      case 'rt_tx_progress': txProgress(m.pos); break;
+      case 'rt_tx_done':
+        txProgress(st.txText.length); setTimeout(() => $('#rtTxLine').classList.add('hidden'), 1200);
+        if (m.msg) toast(m.msg, 6000); break;
+      case 'rt_ai': $('#rtAiBody').textContent = m.ru; $('#rtAiModel').textContent = m.model || ''; break;
+      case 'rt_ai_err': $('#rtAi').classList.remove('hidden'); $('#rtAiBody').textContent = 'Перевод недоступен: ' + m.msg + ' Приём и передача RTTY работают и без ИИ.'; break;
+      case 'fax_state':
+        if (m.state === 'phasing' || (m.state === 'image' && !m.rows && st.fxState !== 'image')) { st.rows = []; redraw(); }
+        st.fxState = m.state; if (m.W) st.W = m.W;
+        if (m.slant !== undefined) $('#fxSlant').textContent = m.slant;
+        if (m.lpm) $('#fxLpm').value = String(m.lpm);
+        if (m.ioc) $('#fxIoc').value = String(m.ioc);
+        if (m.saved && m.saved.length) $('#fxSaved').textContent = 'Сохранено на сервере (папка fax): ' + m.saved.slice(-4).join(', ');
+        $('#fxInfo').textContent = (FX_ST[m.state] || m.state) + (m.rows ? ` · ${m.rows} строк` : '');
+        break;
+      case 'fax_info':
+        $('#fxInfo').textContent = (FX_ST[m.state] || m.state) + (m.rows ? ` · ${m.rows} строк` : '');
+        $('#fxSlant').textContent = m.slant; break;
+      case 'fax_note': toast('Факс: ' + m.msg, 4500); break;
+      case 'fax_saved': toast('Факс сохранён: ' + m.path, 6000); break;
+    }
+  }
+  function onBin(b) {
+    const dv = new DataView(b.buffer, b.byteOffset);
+    const a = dv.getUint16(1, true), W = dv.getUint16(3, true);
+    if (b[0] === 5) addRow(a, new Uint8Array(b.slice(5, 5 + W)));
+    else if (b[0] === 6) {
+      st.rows = []; for (let y = 0; y < a; y++) st.rows.push(new Uint8Array(b.slice(5 + y * W, 5 + (y + 1) * W)));
+      st.W = W; redraw(); wrap.scrollTop = wrap.scrollHeight;
+    }
+  }
+  function pickAudio(hz) {                       // правый клик по водопаду на этой вкладке
+    if (st.sub === 'rtty') { $('#rtFc').value = Math.round(hz); st.fc = Math.round(hz); if (!st.rt) { st.rt = true; renderRt(); } sendRt(); marks(); toast(`RTTY: центр ${st.fc} Гц`); }
+    else toast('Метеофакс: настройте трансивер на 1,9 кГц ниже частоты станции (USB) — сигнал займёт 1500–2300 Гц');
+  }
+  function resend() {
+    st.rt = store.get('rtOn', false); st.fx = store.get('fxOn', false);
+    renderRt(); renderFx();
+    send({ t: 'rt_hello' });
+    if (st.rt) sendRt();
+    if (st.fx) sendFx(); else send({ t: 'fax_hello' });
+    marks();
+  }
+  function stop() { send({ t: 'rt_stop' }); if (wrap.classList.contains('big')) wrap.classList.remove('big'); }
+  return { on, onBin, setFreq: pickAudio, resend, stop };
 })();
 
 // ------------------------------------------------------------------ горячие клавиши
@@ -1201,7 +1460,7 @@ const HOTKEYS = (() => {
       () => { opts.pttMode === 'toggle' ? (C.pttPressed ? pttUp() : pttDown()) : pttDown(); },
       () => { if (opts.pttMode === 'hold') pttUp(); }],
     ['stop', 'Передача', 'Стоп: снять передачу, остановить тюнер и передачу CW, отменить автоответ', ['Escape'],
-      () => { pttUp(); if (S.tuning) act('tune_stop'); cwDesk.stop(); }],
+      () => { pttUp(); if (S.tuning) act('tune_stop'); cwDesk.stop(); digiDesk.stop(); }],
     ['tuner', 'Передача', 'Тюнер: настроить', ['KeyT'], () => { act('tune'); note('Тюнер: настройка'); }],
     ['proc', 'Передача', 'Компрессор PROC', [], () => toggle('proc', 'PROC')],
     ['vox', 'Передача', 'VOX', [], () => toggle('vox', 'VOX')],
