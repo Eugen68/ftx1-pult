@@ -32,6 +32,15 @@ function connect() {
         if (m.port_change) toast('Новые порты заработают после перезапуска программы', 5000);
         break;
       case 'admin_autostart': $('#autostart').checked = !!m.on; break;
+      case 'admin_ai': {
+        const sel = $('#ai_model'), cur = cfg.ai_model || '';
+        sel.innerHTML = '<option value="">Любая загруженная</option>' + (m.models || []).map(x => `<option>${esc(x)}</option>`).join('');
+        if (cur && !(m.models || []).includes(cur)) sel.add(new Option(cur + ' (не загружена)', cur));
+        sel.value = cur;
+        $('#aiHint').textContent = m.ok ? (m.models.length ? `✓ LM Studio отвечает, моделей: ${m.models.length}` : '⚠ LM Studio отвечает, но модель не загружена') : '⚠ ' + m.msg;
+        $('#aiHint').style.color = m.ok && m.models.length ? 'var(--ok)' : 'var(--warn)';
+        break;
+      }
     }
   };
 }
@@ -42,7 +51,10 @@ function init(m) {
   $('#ver').textContent = `версия ${m.version}`;
   fillDevices();
   for (const k of ['cat_baud', 'ptt_method', 'max_tx_seconds', 'http_port', 'https_port']) $('#' + k).value = cfg[k];
-  for (const k of ['simulate', 'auto_connect', 'open_panel', 'open_pult']) $('#' + k).checked = !!cfg[k];
+  for (const k of ['simulate', 'auto_connect', 'open_panel', 'open_pult', 'ai_enabled', 'ai_auto_analyze']) $('#' + k).checked = !!cfg[k];
+  $('#ai_url').value = cfg.ai_url || 'http://localhost:1234/v1';
+  $('#cw_method').value = cfg.cw_method || 'cat';
+  send({ t: 'admin_ai' });
   $('#password').value = cfg.password || '';
   if (m.win) $('#autostart').checked = !!m.autostart; else $('#autostartRow').classList.add('hidden');
   renderUrls(m.urls);
@@ -83,6 +95,7 @@ function fillDevices() {
   };
   $('#cat_port').innerHTML = portOpts(cfg.cat_port, 'enhanced');
   $('#ptt_port').innerHTML = portOpts(cfg.ptt_port, 'standard');
+  $('#cw_port').innerHTML = portOpts(cfg.cw_port, 'standard');
   fillAudio();
 }
 // Звук: отдельно вход (приём) и выход (передача). Значение опции — «имя|API».
@@ -140,6 +153,9 @@ function collect() {
     auto_connect: $('#auto_connect').checked, open_panel: $('#open_panel').checked, open_pult: $('#open_pult').checked,
     max_tx_seconds: Math.max(10, Math.min(1800, +$('#max_tx_seconds').value || 180)),
     http_port: +$('#http_port').value || 8080, https_port: +$('#https_port').value || 8443,
+    ai_enabled: $('#ai_enabled').checked, ai_auto_analyze: $('#ai_auto_analyze').checked,
+    ai_url: $('#ai_url').value.trim() || 'http://localhost:1234/v1', ai_model: $('#ai_model').value,
+    cw_method: $('#cw_method').value, cw_port: $('#cw_port').value,
   };
 }
 function save() { clearTimeout(saveT); saveT = setTimeout(() => send({ t: 'admin_save', cfg: collect() }), 350); }
@@ -150,7 +166,11 @@ document.querySelectorAll('select, input').forEach(el => {
     pttPortVisibility(); pwHint(); save();
   });
 });
-function pttPortVisibility() { $('#pttPortField').classList.toggle('hidden', !/RTS|DTR/.test($('#ptt_method').value)); }
+function pttPortVisibility() {
+  $('#pttPortField').classList.toggle('hidden', !/RTS|DTR/.test($('#ptt_method').value));
+  $('#cwPortField').classList.toggle('hidden', $('#cw_method').value === 'cat');
+}
+$('#aiTest').onclick = () => { clearTimeout(saveT); send({ t: 'admin_save', cfg: collect() }); setTimeout(() => send({ t: 'admin_ai' }), 300); $('#aiHint').textContent = 'Проверяю…'; };
 function pwHint() {
   const pw = $('#password').value;
   $('#pwHint').textContent = !pw ? '⚠ Пароль не задан — с телефона войти нельзя (это безопасно, но неудобно).'

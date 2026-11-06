@@ -11,6 +11,70 @@ import numpy as np
 from audio import SR, BLOCK, TxBuffer
 
 
+class SimCwOp:
+    """Корреспондент-телеграфист UA3ABC: даёт CQ, отвечает на наш вызов и проводит связь."""
+    CALL, NAME, QTH = 'UA3ABC', 'IVAN', 'MOSCOW'
+    FREQ = 14025500
+
+    def __init__(self):
+        self.wpm = 18
+        self.on = np.zeros(0)
+        self.off = np.zeros(0)
+        self.busy_until = 0.0
+        self.stage = 'cq'
+        self.their = ''
+        self.next_cq = time.monotonic() + 3
+        self.lock = threading.Lock()
+
+    def schedule(self, text, at=None):
+        from cw import text_units
+        at = max(at or time.monotonic(), self.busy_until)
+        u = 1.2 / self.wpm
+        t, on, off = at, [], []
+        for k, n in text_units(text):
+            if k:
+                on.append(t); off.append(t + n * u)
+            t += n * u
+        with self.lock:
+            self.on, self.off = np.array(on), np.array(off)
+        self.busy_until = t + 0.3
+
+    def keyed(self, tm):
+        with self.lock:
+            on, off = self.on, self.off
+        if not len(on):
+            return np.zeros(len(tm), bool)
+        i = np.searchsorted(on, tm, 'right') - 1
+        ok = i >= 0
+        res = np.zeros(len(tm), bool)
+        res[ok] = tm[ok] < off[i[ok]]
+        return res
+
+    def tick(self):
+        now = time.monotonic()
+        if self.stage in ('cq', 'done') and now > self.next_cq and now > self.busy_until:
+            self.stage = 'cq'
+            self.schedule('CQ CQ CQ DE %s %s K' % (self.CALL, self.CALL))
+            self.next_cq = self.busy_until + 20
+
+    def heard(self, text):
+        """Мы передали text (через память ключа)."""
+        t = text.upper()
+        m = re.search(r'DE\s+([A-Z0-9/]+)', t)
+        if self.CALL not in t or not m:
+            return
+        self.their = m.group(1)
+        at = time.monotonic() + 1.5
+        if self.stage == 'cq':
+            self.stage = 'report'
+            self.schedule('%s DE %s GM TNX FER CALL UR RST 599 599 NAME %s %s QTH %s %s HW? %s DE %s KN'
+                          % (self.their, self.CALL, self.NAME, self.NAME, self.QTH, self.QTH, self.their, self.CALL), at)
+        elif self.stage == 'report':
+            self.stage = 'done'
+            self.schedule('R %s DE %s TNX FER QSO 73 GL <SK>' % (self.their, self.CALL), at)
+            self.next_cq = at + 30
+
+
 class SimRadio:
     def __init__(self):
         self.s = {
@@ -25,6 +89,8 @@ class SimRadio:
             'CN01': '000', 'OS0': '0', 'TS': '0', 'AO': '050', 'AI': '0', 'MS': '00', 'DA': '10',
         }
         self.menu = {}
+        self.cwop = SimCwOp()
+        self.kmem = {}
         self.tx_level = 0.0
         self.t0 = time.time()
 
@@ -75,6 +141,29 @@ class SimRadio:
             i = int(cmd[3:5])
             if i < len(bands):
                 self.s['FA'] = '%09d' % bands[i]
+            return ''
+        m = re.match(r'^KM([1-5])(.*)$', cmd)
+        if m:
+            if m.group(2):
+                self.kmem[m.group(1)] = m.group(2)
+                return ''
+            return 'KM%s%s;' % (m.group(1), self.kmem.get(m.group(1), ''))
+        m = re.match(r'^KY0([0-5])$', cmd)
+        if m:
+            n = m.group(1)
+            if n == '0':
+                self.s['TX'] = '0'
+                return ''
+            text = self.kmem.get(n, '')
+            if text and self.s['MD0'] in ('3', '7') and self.s.get('BI') == '1':
+                from cw import text_units
+                dur = sum(u for _, u in text_units(text)) * 1.2 / max(4, int(self.s.get('KS', '020')))
+                self.s['TX'] = '1'
+                def done(txt=text):
+                    if self.s['TX'] != '0':
+                        self.s['TX'] = '0'
+                        self.cwop.heard(txt)
+                threading.Timer(0.3 + dur, done).start()
             return ''
         if cmd in ('BU0', 'BD0', 'ZI0', 'QI', 'QR') or cmd.startswith(('KY', 'KM', 'PB', 'CS', 'SC', 'VM', 'MC', 'PS')):
             return ''
@@ -164,15 +253,20 @@ class SimAudio:
             return x * 0.1
         f0 = self.radio.freq()
         # «станции» на фиксированных частотах эфира: слышны, если попадают в полосу 0..3 кГц
-        stations = [(14075300, 0.02, 'cw'), (14076150, 0.01, 'ft8'), (14074800, 0.008, 'ft8'),
-                    (14075700, 0.012, 'ft8'), (7072500, 0.03, 'cw'), (14077100, 0.015, 'ssb')]
+        stations = [(14076150, 0.01, 'ft8'), (14074800, 0.008, 'ft8'),
+                    (14075700, 0.012, 'ft8'), (14077100, 0.015, 'ssb'), (SimCwOp.FREQ, 0.012, 'op')]
+        cwop = self.radio.cwop
+        cwop.tick()
+        tm = time.monotonic() + np.arange(BLOCK) / SR
         for fs, a, kind in stations:
             af = fs - f0
             if not (80 < af < 4000):
                 continue
-            if kind == 'cw':
-                keyed = (np.floor(t * 8) % 5 < 3) & (np.floor(t * 0.5) % 2 == 0)
-                x += a * keyed * np.sin(2 * np.pi * af * t)
+            if kind == 'op':
+                # в CW слышим тон = расстройка; плавные фронты 5 мс сглаживанием ключа
+                tx = np.concatenate([tm[0] - np.arange(239, 0, -1) / SR, tm])
+                k = np.convolve(cwop.keyed(tx).astype(np.float32), np.ones(240) / 240, mode='valid')
+                x += a * k * np.sin(2 * np.pi * af * t)
             elif kind == 'ft8':
                 sym = np.floor(t / 0.16) % 8
                 on = (t % 15) < 12.6

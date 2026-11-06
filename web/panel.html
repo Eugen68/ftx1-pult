@@ -146,6 +146,23 @@
     </section>
 
     <section class="panel card">
+      <h3>🤖 ИИ и телеграф</h3>
+      <label class="chk"><input type="checkbox" id="ai_enabled"> ИИ-помощник CW (LM Studio)</label>
+      <label class="chk"><input type="checkbox" id="ai_auto_analyze"> Разбирать каждую принятую передачу автоматически</label>
+      <label class="field"><span>Адрес сервера LM Studio</span>
+        <div class="row"><input type="text" id="ai_url" placeholder="http://localhost:1234/v1"><button class="btn" id="aiTest">Проверить</button></div></label>
+      <label class="field"><span>Модель</span><select id="ai_model"><option value="">Любая загруженная</option></select></label>
+      <div class="hint" id="aiHint">В LM Studio загрузите модель и включите сервер: Developer → Start Server.</div>
+      <label class="field"><span>Как передавать CW-текст</span>
+        <select id="cw_method">
+          <option value="cat">Памятью ключа трансивера по CAT (рекомендуется)</option>
+          <option value="dtr">Манипуляция линией DTR второго порта</option>
+          <option value="rts">Манипуляция линией RTS второго порта</option>
+        </select></label>
+      <label class="field hidden" id="cwPortField"><span>Порт манипуляции (у FTX-1 — «Standard COM Port»); в меню трансивера CW_PC_KEYING = DTR/RTS</span><select id="cw_port"></select></label>
+    </section>
+
+    <section class="panel card">
       <h3>⚙ Запуск</h3>
       <div class="checks">
         <label class="chk" id="autostartRow"><input type="checkbox" id="autostart"> Запускать вместе с Windows (в трее, без окна)</label>

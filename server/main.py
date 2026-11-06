@@ -40,8 +40,9 @@ sys.path.insert(0, RES)
 from cat import Rig, SerialTransport, SerialPtt, CTCSS  # noqa: E402
 from audio import SR, Decimator, Interpolator, Waterfall  # noqa: E402
 from webserver import WebServer  # noqa: E402
+from cwdesk import CwDesk  # noqa: E402
 
-VERSION = "1.6"
+VERSION = "1.7"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -66,6 +67,18 @@ DEFAULT_CFG = {
     "open_panel": True,
     "open_pult": False,
     "simulate": False,
+    "my_call": "",
+    "my_name": "",
+    "my_qth": "",
+    "my_extra": "",
+    "cw_method": "cat",
+    "cw_port": "",
+    "cw_auto_delay": 6,
+    "cw_auto_max": 4,
+    "ai_enabled": True,
+    "ai_auto_analyze": True,
+    "ai_url": "http://localhost:1234/v1",
+    "ai_model": "",
 }
 
 
@@ -264,6 +277,8 @@ class Client:
         self.wf_max = 4000
         self.console = None
         self.name = '%s:%s' % ws.peer[:2] if ws.peer else '?'
+        self.cw_dec = False
+        self.cw_auto = False
         self.interp = None
 
 
@@ -289,7 +304,14 @@ class Station:
         self.ports_cache, self.audio_cache = [], []
         with open(os.path.join(RES, 'menu_ftx1.json'), encoding='utf-8') as f:
             self.menu = json.load(f)
+        self.cw = CwDesk(self)
         LOGBUF.listeners.append(self._on_log)
+
+    def save_cfg(self):
+        try:
+            save_cfg(self.cfg)
+        except OSError as e:
+            log.error("Не удалось сохранить настройки: %s", e)
 
     @property
     def sim(self):
@@ -354,6 +376,7 @@ class Station:
     async def stop_radio(self):
         if not self.running:
             return
+        self.cw.stop()
         if self.ptt_owner:
             self.set_ptt(None, False)
             await asyncio.sleep(0.15)
@@ -398,6 +421,7 @@ class Station:
                     if c.wf and c.authed:
                         n = min(len(row), int(c.wf_max / self.wf.bin_hz) + 1)
                         c.ws.send_bin(b'\x02' + struct.pack('<Hf', n, self.wf.bin_hz) + row[:n].tobytes())
+        self.cw.feed(x)
 
     def _on_rig_change(self, diff):
         self.broadcast({'t': 'state', 's': diff})
@@ -459,6 +483,7 @@ class Station:
                         log.warning("PTT снят: превышено время передачи")
                         self.ptt_owner.ws.send_json({'t': 'note', 'msg': 'Передача снята: превышено время (%d с)' % self.cfg['max_tx_seconds']})
                         self.set_ptt(None, False)
+                await self.cw.tick()
                 if self.audio:
                     lv = {'t': 'lv', 'rx': round(getattr(self.audio, 'rx_level', 0), 4), 'tx': round(self.audio.tx.level, 4)}
                     self.broadcast(lv)
@@ -555,6 +580,14 @@ class Station:
                 v = autostart_get()
                 log.error("Не удалось изменить автозапуск: %s", e)
             c.ws.send_json({'t': 'admin_autostart', 'on': v})
+        elif t == 'admin_ai':
+            import ai as ai_mod
+            lm = ai_mod.LmStudio(self.cfg.get('ai_url'), '')
+            try:
+                models = await asyncio.to_thread(lm.models)
+                c.ws.send_json({'t': 'admin_ai', 'ok': True, 'models': models})
+            except ai_mod.AiError as e:
+                c.ws.send_json({'t': 'admin_ai', 'ok': False, 'msg': str(e), 'models': []})
         elif t == 'admin_open_pult':
             webbrowser.open('http://localhost:%d/' % self.cfg['http_port'])
         elif t == 'admin_open_folder':
@@ -593,6 +626,7 @@ class Station:
                 self.set_ptt(None, False)
             if c.console and self.rig:
                 self.rig.remove_raw_listener(c.console)
+            self.cw.client_gone(c)
             if c.authed and not c.admin:
                 log.info("Отключился %s", c.name)
                 self.push_status()
@@ -637,6 +671,9 @@ class Station:
                 c.ws.send_json({'t': 'auth_fail', 'msg': msg})
             return
         if not c.authed:
+            return
+        if t.startswith('cw_'):
+            await self.cw.on_msg(c, m)
             return
         if t == 'audio':
             c.audio = bool(m.get('on'))

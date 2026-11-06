@@ -120,7 +120,7 @@
       <button data-tab="rx" class="on">Приём</button>
       <button data-tab="tx">Передача</button>
       <button data-tab="vfo">VFO/Память</button>
-      <button data-tab="cw">CW</button>
+      <button data-tab="cw">CW · Морзе</button>
       <button data-tab="menu">Меню</button>
       <button data-tab="cat">CAT</button>
       <button data-tab="opts">Настройки</button>
@@ -217,6 +217,65 @@
     </div>
 
     <div class="tab" id="tab-cw">
+      <!-- ===== Декодер ===== -->
+      <div class="cw-bar">
+        <button class="btn" id="cwDecBtn" title="Расшифровка азбуки Морзе из звука приёма">● Декодер</button>
+        <div class="seg" id="cwAlpha"><button data-v="lat" class="on">LAT</button><button data-v="cyr">КИР</button></div>
+        <label class="mini" title="Частота тона: авто — сам находит самый сильный сигнал в полосе. Правый клик по водопаду — задать вручную">Тон
+          <select id="cwFreq"><option value="0">авто</option></select></label>
+        <label class="mini" title="Чувствительность: меньше — читает слабее сигналы, но больше мусора от помех">Порог<input type="range" id="cwSq" min="11" max="28" value="15"></label>
+        <span class="cw-meter mono" id="cwInfo">—</span>
+        <span class="spacer"></span>
+        <button class="btn small" id="cwClear" title="Очистить экран">Очистить</button>
+        <button class="btn small" id="cwNew" title="Начать новую связь: ИИ забудет ход прошлой">Новая связь</button>
+      </div>
+      <div class="cw-screen mono" id="cwScreen" aria-live="polite"><span class="muted" id="cwHint">Включите декодер и настройтесь на телеграфную станцию: двойной клик по сигналу на водопаде (в режиме CW).</span></div>
+
+      <!-- ===== ИИ ===== -->
+      <div class="cw-ai" id="cwAi">
+        <div class="cw-ai-head">
+          <b>ИИ-помощник</b>
+          <span class="muted small" id="cwAiStatus">LM Studio: не проверено</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="cwAnalyze" title="Разобрать последнее принятое (клавиша I)">Разобрать</button>
+          <button class="btn small" id="cwReply" title="ИИ составит ответ корреспонденту (клавиша Y)">✨ Ответ ИИ</button>
+        </div>
+        <div id="cwAiBody" class="cw-ai-body muted small">Принятое после паузы разбирает языковая модель в LM Studio: исправляет ошибки декодера, переводит и выделяет позывной, RST, имя и QTH.</div>
+      </div>
+
+      <!-- ===== Передача ===== -->
+      <div class="cw-tx">
+        <div class="cw-proposal hidden" id="cwProposal">
+          <div><b id="cwPropTitle">Ответ ИИ</b> <span class="muted small" id="cwPropRu"></span></div>
+          <div class="mono cw-prop-text" id="cwPropText"></div>
+          <div class="btn-row"><button class="btn primary" id="cwPropSend">▶ Передать</button><button class="btn" id="cwPropEdit">Изменить</button><button class="btn" id="cwPropCancel">Отменить</button><span class="cw-count mono" id="cwPropCount"></span></div>
+        </div>
+        <div class="cw-macros" id="cwMacros"></div>
+        <div class="cw-txrow">
+          <textarea id="cwText" class="mono" rows="2" placeholder="Текст для передачи (Ctrl+Enter — передать). {CALL} — позывной корреспондента, {MY} — ваш"></textarea>
+          <div class="cw-txbtns">
+            <button class="btn primary" id="cwSend" title="Ctrl+Enter">▶ Передать</button>
+            <button class="btn" id="cwStop" title="Esc">■ Стоп</button>
+          </div>
+        </div>
+        <div class="cw-txline mono hidden" id="cwTxLine"></div>
+        <div class="cw-auto">
+          <label class="chk"><input type="checkbox" id="cwAuto"> <b>Автоответ ИИ</b></label>
+          <span class="muted small">Когда корреспондент зовёт ваш позывной и закончил передачу, ИИ составит ответ и передаст его через
+            <input type="number" id="cwAutoDelay" min="3" max="30" class="num tiny"> с (можно отменить). Не больше
+            <input type="number" id="cwAutoMax" min="1" max="20" class="num tiny"> передач подряд.</span>
+        </div>
+      </div>
+
+      <h4>Оператор</h4>
+      <div class="cw-op">
+        <label>Позывной<input id="opCall" class="text mono" placeholder="R6AAF"></label>
+        <label>Имя<input id="opName" class="text" placeholder="EUGENE"></label>
+        <label>QTH<input id="opQth" class="text" placeholder="GELENDZHIK"></label>
+        <label class="grow">Ещё о себе (для ИИ)<input id="opExtra" class="text" placeholder="RIG FTX-1 10W ANT VERTICAL"></label>
+      </div>
+
+      <h4>Ключ трансивера</h4>
       <div class="ctl-grid">
         <div class="ctl" data-k="key_speed" data-min="4" data-max="60" data-label="Скорость, WPM"></div>
         <div class="ctl" data-k="key_pitch" data-min="0" data-max="75" data-label="Тон CW" data-fmt="pitch"></div>
@@ -230,7 +289,8 @@
       </div>
       <h4>Память ключа</h4>
       <div id="cwMems" class="cw-mems"></div>
-      <p class="muted small">Текст записывается в память трансивера (KM) и передаётся им самим (KY) — без задержек сети. Нужен включённый BREAK-IN.</p>
+      <p class="muted small">Текст передаёт сам трансивер из своей памяти ключа (до 50 знаков за раз) — без задержек сети. BREAK-IN включается автоматически.
+        Длинный текст передаётся кусками через ячейку 5.</p>
     </div>
 
     <div class="tab" id="tab-menu">

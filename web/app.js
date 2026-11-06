@@ -105,6 +105,7 @@ function connect() {
         $('#srvInfo').textContent = `Сервер v${m.version}. PTT: ${m.ptt_method}. Ограничение передачи: ${m.max_tx} с.` + (m.audio_err ? ` ЗВУК: ${m.audio_err}` : '');
         setWfMsg(m.audio_err);
         updateSpan(true);
+        send({ t: 'cw_hello' }); cwDesk.resend();
         if (C.audioOn) send({ t: 'audio', on: true, rate: C.rate });
         break;
       case 'auth_fail':
@@ -122,6 +123,7 @@ function connect() {
       case 'raw': catLine(m.line); break;
       case 'menu_list': buildMenu(m.items); break;
       case 'menu_val': setMenuVal(m.ex, m.v); break;
+      default: if (m.t && m.t.startsWith('cw_')) cwDesk.on(m);
     }
   };
 }
@@ -565,6 +567,10 @@ function drawOverlay() {
   ctx.strokeStyle = 'rgba(255,211,77,.7)'; ctx.lineWidth = dpr;
   ctx.beginPath(); ctx.moveTo(X(lo), 0); ctx.lineTo(X(lo), H); ctx.moveTo(X(hi), 0); ctx.lineTo(X(hi), H); ctx.stroke();
   if (isCW(S.mode)) { ctx.strokeStyle = '#ff5a4d'; ctx.beginPath(); ctx.moveTo(X(pitchHz()), 0); ctx.lineTo(X(pitchHz()), H); ctx.stroke(); }
+  if (C.cwMark) {                                   // частота, которую слушает декодер CW
+    ctx.strokeStyle = '#3ddc84'; ctx.setLineDash([2 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath(); ctx.moveTo(X(C.cwMark), 0); ctx.lineTo(X(C.cwMark), H); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = dpr;
+  }
   if (S.notch) { ctx.strokeStyle = '#ff7ad9'; ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.beginPath(); ctx.moveTo(X(S.notch_freq), 0); ctx.lineTo(X(S.notch_freq), H); ctx.stroke(); ctx.setLineDash([]); }
   // шкала: Гц звука + частота в эфире
   const stepK = span <= 4000 ? 500 : span <= 6000 ? 1000 : span <= 12000 ? 2000 : 4000;
@@ -598,6 +604,9 @@ function tuneToAudio(a) {
   });
   w.addEventListener('pointerleave', () => { cur.style.display = 'none'; });
   w.addEventListener('dblclick', e => tuneToAudio(aAt(e)));
+  w.addEventListener('contextmenu', e => {            // правый клик — декодер CW слушает эту частоту
+    e.preventDefault(); cwDesk.setFreq(Math.round(aAt(e)));
+  });
   let lastTap = 0;
   w.addEventListener('pointerup', e => {           // двойной тап на телефоне
     if (e.pointerType !== 'touch') return;
@@ -958,6 +967,211 @@ $('#btnFull').onclick = () => {
 };
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => { });
 
+// ------------------------------------------------------------------ CW · Морзе: декодер, ИИ, передача
+const cwDesk = (() => {
+  const st = { dec: false, cyr: store.get('cwCyr', false), freq: 0, sq: store.get('cwSq', 15), auto: false,
+    lastCall: '', lastRst: '599', analysis: null, op: {}, propTimer: null, txText: '', aiOk: null };
+  const scr = $('#cwScreen');
+  let cur = null;                                  // строка текущей передачи корреспондента
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const atBottom = () => scr.scrollTop + scr.clientHeight >= scr.scrollHeight - 30;
+  function line(cls, text) {
+    $('#cwHint')?.remove();
+    const d = document.createElement('span'); d.className = cls; d.textContent = text;
+    if (cur && cur.parentNode) scr.insertBefore(d, cur); else scr.appendChild(d);
+    while (scr.children.length > 120) scr.removeChild(scr.firstChild);
+    return d;
+  }
+  function curLine() {
+    if (!cur || !cur.parentNode) { $('#cwHint')?.remove(); cur = document.createElement('span'); cur.className = 'rx-over cur'; scr.appendChild(cur); }
+    return cur;
+  }
+  function addRx(ch) { const end = atBottom(); curLine().textContent += ch; if (end) scr.scrollTop = scr.scrollHeight; }
+  function closeOver(item) {
+    if (cur) { cur.classList.remove('cur'); cur.textContent = item.text; cur = null; }
+    else line('rx-over', item.text);
+    scr.scrollTop = scr.scrollHeight;
+  }
+  // ---- декодер
+  function sendDec() { send({ t: 'cw_dec', on: st.dec, cyr: st.cyr, freq: st.freq, sq: st.sq }); }
+  function renderDec() {
+    $('#cwDecBtn').classList.toggle('on', st.dec);
+    $('#cwDecBtn').textContent = st.dec ? '● Декодер вкл' : '○ Декодер выкл';
+    $$('#cwAlpha button').forEach(b => b.classList.toggle('on', (b.dataset.v === 'cyr') === st.cyr));
+    $('#cwSq').value = st.sq;
+    const sel = $('#cwFreq');
+    if (st.freq && ![...sel.options].some(o => +o.value === st.freq)) sel.add(new Option(st.freq + ' Гц', st.freq));
+    sel.value = st.freq;
+    if (!st.dec) { $('#cwInfo').textContent = '—'; C.cwMark = 0; drawOverlay(); }
+  }
+  function toggle(on = !st.dec) { st.dec = on; store.set('cwDec', on); sendDec(); renderDec(); if (on) note('Декодер Морзе включён'); }
+  function setFreq(hz) {
+    if (!st.dec) toggle(true);
+    st.freq = clamp(hz, 200, 3000); sendDec(); renderDec(); note(`Декодер слушает ${st.freq} Гц`);
+  }
+  const note = m => toast(m, 1600);
+  for (let f = 400; f <= 1000; f += 50) $('#cwFreq').add(new Option(f + ' Гц', f));
+  $('#cwDecBtn').onclick = () => toggle();
+  $$('#cwAlpha button').forEach(b => b.onclick = () => { st.cyr = b.dataset.v === 'cyr'; store.set('cwCyr', st.cyr); sendDec(); renderDec(); });
+  $('#cwFreq').onchange = e => { st.freq = +e.target.value; sendDec(); };
+  $('#cwSq').oninput = e => { st.sq = +e.target.value; store.set('cwSq', st.sq); clearTimeout(e.target._t); e.target._t = setTimeout(sendDec, 150); };
+  $('#cwClear').onclick = () => { scr.innerHTML = ''; cur = null; send({ t: 'cw_clear' }); };
+  $('#cwNew').onclick = () => send({ t: 'cw_new' });
+
+  // ---- ИИ
+  function renderAnalysis(a) {
+    st.analysis = a;
+    if (!a) { $('#cwAiBody').innerHTML = '<span class="muted small">Разбора пока нет.</span>'; return; }
+    if (a.call) st.lastCall = a.call;
+    const me = a.calls_me && a.calls_me_strict;
+    const chip = (k, v) => v ? `<span class="chip">${k} <b>${esc(v)}</b></span>` : '';
+    const kind = { cq: 'общий вызов CQ', answer: 'ответ на вызов', report: 'рапорт', final: 'завершение связи' }[a.kind] || '';
+    $('#cwAiBody').innerHTML = `<div class="clean">${esc(a.clean || a.raw)}</div><div class="ru">${esc(a.ru)}</div>
+      <div class="cw-chips">${me ? '<span class="chip me">Зовёт вас</span>' : ''}${chip('Позывной', a.call)}${chip('Кому', a.to)}
+      ${chip('RST вам', a.rst)}${chip('Имя', a.name)}${chip('QTH', a.qth)}${kind ? `<span class="chip">${kind}</span>` : ''}
+      ${a.confidence ? `<span class="chip">уверенность <b>${Math.round(a.confidence * 100)}%</b></span>` : ''}</div>`;
+  }
+  function aiStatus(text, bad) { const s = $('#cwAiStatus'); s.textContent = text; s.style.color = bad ? 'var(--tx)' : ''; }
+  $('#cwAnalyze').onclick = () => send({ t: 'cw_ai_analyze' });
+  $('#cwReply').onclick = () => send({ t: 'cw_ai_reply' });
+
+  // ---- предложение ответа (ИИ / автоответ)
+  function showProposal(p) {
+    clearInterval(st.propTimer);
+    $('#cwProposal').classList.toggle('hidden', !p);
+    if (!p) return;
+    $('#cwPropTitle').textContent = p.auto ? 'Автоответ ИИ' : 'Ответ ИИ';
+    $('#cwPropText').textContent = p.text; $('#cwPropRu').textContent = p.ru || '';
+    const end = performance.now() + p.left * 1000;
+    const tick = () => {
+      const s = Math.max(0, Math.ceil((end - performance.now()) / 1000));
+      $('#cwPropCount').textContent = p.auto ? `передача через ${s} с` : '';
+    };
+    tick(); if (p.auto) st.propTimer = setInterval(tick, 200);
+    st.prop = p;
+  }
+  $('#cwPropSend').onclick = () => { if (st.prop) send({ t: 'cw_send', text: st.prop.text }); send({ t: 'cw_proposal_cancel' }); };
+  $('#cwPropEdit').onclick = () => { if (st.prop) $('#cwText').value = st.prop.text; send({ t: 'cw_proposal_cancel' }); $('#cwText').focus(); };
+  $('#cwPropCancel').onclick = () => send({ t: 'cw_proposal_cancel' });
+
+  // ---- передача
+  function fill(t) {
+    const o = st.op;
+    return t.replace(/\{CALL\}/g, st.lastCall || '?').replace(/\{MY\}/g, o.my_call || '?').replace(/\{NAME\}/g, o.my_name || '')
+      .replace(/\{QTH\}/g, o.my_qth || '').replace(/\{RST\}/g, st.lastRst || '599').replace(/\s+/g, ' ').trim();
+  }
+  const MACROS = [
+    ['CQ', 'CQ CQ CQ DE {MY} {MY} {MY} K'],
+    ['Ответ', '{CALL} DE {MY} {MY} K'],
+    ['Рапорт', '{CALL} DE {MY} GM TNX FER CALL UR RST {RST} {RST} NAME {NAME} {NAME} QTH {QTH} {QTH} HW? {CALL} DE {MY} KN'],
+    ['73', '{CALL} DE {MY} TNX FER QSO 73 GL <SK>'],
+    ['AGN?', 'AGN? AGN?'],
+    ['QRZ?', 'QRZ? DE {MY} K'],
+    ['Позывной', '{MY}'],
+  ];
+  $('#cwMacros').innerHTML = MACROS.map(([n, t], i) => `<button class="btn" data-i="${i}" title="${esc(t)}">${n}</button>`).join('');
+  $('#cwMacros').onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const tpl = MACROS[+b.dataset.i][1], t = fill(tpl);
+    const missing = (tpl.includes('{CALL}') && !st.lastCall) || (tpl.includes('{MY}') && !st.op.my_call);
+    if (e.shiftKey || missing) {                                          // Shift — только вставить в поле
+      $('#cwText').value = t; $('#cwText').focus();
+      if (missing) toast(!st.op.my_call ? 'Укажите свой позывной в разделе «Оператор»' : 'Позывной корреспондента ещё неизвестен — впишите его вместо «?»', 3500);
+    } else send({ t: 'cw_send', text: t });
+  };
+  function sendText() {
+    const t = fill($('#cwText').value);
+    if (!t) return;
+    send({ t: 'cw_send', text: t });
+  }
+  $('#cwSend').onclick = sendText;
+  $('#cwStop').onclick = () => stop();
+  $('#cwText').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendText(); }
+  });
+  function stop() { send({ t: 'cw_stop' }); }
+  function txStart(item) {
+    line('tx-line', item.text);
+    st.txText = item.text;
+    $('#cwTxLine').classList.remove('hidden');
+    txProgress(0);
+    $('#cwText').value = '';
+  }
+  function txProgress(pos) {
+    const t = st.txText;
+    $('#cwTxLine').innerHTML = `<span class="done">${esc(t.slice(0, pos))}</span>${esc(t.slice(pos))}`;
+  }
+  // ---- автоответ и оператор
+  $('#cwAuto').onchange = e => {
+    if (e.target.checked && !(st.op.my_call)) { e.target.checked = false; toast('Сначала укажите свой позывной в разделе «Оператор»', 3000); return; }
+    send({ t: 'cw_auto', on: e.target.checked });
+    if (e.target.checked && !st.dec) toggle(true);
+  };
+  const opIds = { opCall: 'my_call', opName: 'my_name', opQth: 'my_qth', opExtra: 'my_extra' };
+  for (const [id, k] of Object.entries(opIds)) {
+    $('#' + id).addEventListener('change', e => send({ t: 'cw_op', [k]: e.target.value }));
+  }
+  $('#cwAutoDelay').onchange = e => send({ t: 'cw_op', cw_auto_delay: +e.target.value });
+  $('#cwAutoMax').onchange = e => send({ t: 'cw_op', cw_auto_max: +e.target.value });
+  function renderOp(op, delay, max) {
+    st.op = op || st.op;
+    for (const [id, k] of Object.entries(opIds)) if (document.activeElement !== $('#' + id)) $('#' + id).value = st.op[k] || '';
+    if (delay) $('#cwAutoDelay').value = delay;
+    if (max) $('#cwAutoMax').value = max;
+  }
+
+  // ---- сообщения сервера
+  function on(m) {
+    switch (m.t) {
+      case 'cw_state':
+        st.freq = m.dec.freq || 0;
+        renderOp(m.op, m.auto_delay, m.auto_max);
+        scr.innerHTML = ''; cur = null;
+        for (const h of m.history) line(h.dir === 'tx' ? 'tx-line' : 'rx-over', h.clean && h.dir === 'rx' ? h.text : h.text);
+        if (m.over) curLine().textContent = m.over;
+        if (!m.history.length && !m.over) scr.innerHTML = '<span class="muted" id="cwHint">Включите декодер и настройтесь на телеграфную станцию: двойной клик по сигналу на водопаде (в режиме CW). Правый клик по сигналу — декодер будет слушать именно его.</span>';
+        renderAnalysis(m.analysis); showProposal(m.proposal);
+        if (m.busy_tx && m.tx_text) { st.txText = m.tx_text; $('#cwTxLine').classList.remove('hidden'); txProgress(0); }
+        $('#cwAuto').checked = false;
+        aiStatus(`LM Studio: ${m.ai_url}${m.ai_model ? ' · ' + m.ai_model : ''} — проверяю…`);
+        send({ t: 'cw_ai_test' });
+        renderDec();
+        break;
+      case 'cw_rx': addRx(m.text); break;
+      case 'cw_info': {
+        $('#cwInfo').innerHTML = `<span class="sig ${m.sig ? 'on' : ''}"></span>${m.wpm ? m.wpm + ' WPM · ' : ''}${m.freq} Гц${m.auto ? ' (авто)' : ''} · ${m.snr} дБ`;
+        if (C.cwMark !== m.freq) { C.cwMark = m.freq; drawOverlay(); }
+        break;
+      }
+      case 'cw_over': closeOver(m.item); break;
+      case 'cw_clear': if (cur) { cur.remove(); cur = null; } break;
+      case 'cw_new': scr.innerHTML = ''; cur = null; renderAnalysis(null); st.lastCall = ''; toast('Новая связь'); break;
+      case 'cw_dec': break;
+      case 'cw_ai_busy': aiStatus(m.on ? m.what : (st.aiOk ? 'LM Studio: готов' : 'LM Studio'), false); $('#cwAiStatus').classList.toggle('cw-busy', m.on); break;
+      case 'cw_ai': renderAnalysis(m.a); aiStatus('LM Studio: готов · ' + (m.a.model || '')); break;
+      case 'cw_ai_err': aiStatus(m.msg, true); toast(m.msg, 5000); break;
+      case 'cw_ai_test':
+        st.aiOk = m.ok;
+        aiStatus(m.ok ? `LM Studio: готов · ${m.model || m.models[0] || 'модель не загружена'}` : m.msg, !m.ok);
+        if (m.ok && !m.models.length) aiStatus('LM Studio работает, но модель не загружена — загрузите её в LM Studio', true);
+        break;
+      case 'cw_proposal': showProposal(m.p); break;
+      case 'cw_tx_start': txStart(m.item); break;
+      case 'cw_tx_progress': txProgress(m.pos); break;
+      case 'cw_tx_done':
+        txProgress(st.txText.length);
+        setTimeout(() => $('#cwTxLine').classList.add('hidden'), 1200);
+        if (m.msg) toast(m.msg, 5000); else if (!m.ok) toast('Передача CW остановлена');
+        break;
+      case 'cw_auto': if (!m.on) $('#cwAuto').checked = false; break;
+      case 'cw_op': renderOp(m.op, m.auto_delay, m.auto_max); break;
+      case 'cw_note': toast(m.msg, 4500); break;
+    }
+  }
+  function resend() { if (store.get('cwDec', false)) { st.dec = true; sendDec(); } renderDec(); }
+  return { on, toggle, setFreq, stop, resend };
+})();
+
 // ------------------------------------------------------------------ горячие клавиши
 // Клавиши привязаны к физическим кнопкам (event.code), поэтому работают в любой раскладке.
 // Любое действие можно переназначить во вкладке «Настройки». Справка — «?» или F1.
@@ -986,8 +1200,8 @@ const HOTKEYS = (() => {
     ['ptt', 'Передача', 'PTT — передача (держать)', ['Space'],
       () => { opts.pttMode === 'toggle' ? (C.pttPressed ? pttUp() : pttDown()) : pttDown(); },
       () => { if (opts.pttMode === 'hold') pttUp(); }],
-    ['stop', 'Передача', 'Стоп: снять передачу, остановить тюнер', ['Escape'],
-      () => { pttUp(); if (S.tuning) act('tune_stop'); }],
+    ['stop', 'Передача', 'Стоп: снять передачу, остановить тюнер и передачу CW, отменить автоответ', ['Escape'],
+      () => { pttUp(); if (S.tuning) act('tune_stop'); cwDesk.stop(); }],
     ['tuner', 'Передача', 'Тюнер: настроить', ['KeyT'], () => { act('tune'); note('Тюнер: настройка'); }],
     ['proc', 'Передача', 'Компрессор PROC', [], () => toggle('proc', 'PROC')],
     ['vox', 'Передача', 'VOX', [], () => toggle('vox', 'VOX')],
@@ -1038,6 +1252,10 @@ const HOTKEYS = (() => {
     }],
     ['full', 'Звук и экран', 'Во весь экран', [], () => $('#btnFull').click()],
     ['help', 'Звук и экран', 'Справка по клавишам', ['Shift+Slash', 'F1'], () => showHelp()],
+    ['cwdec', 'CW', 'Декодер Морзе вкл/выкл', ['KeyE'], () => cwDesk.toggle()],
+    ['cwai', 'CW', 'ИИ: разобрать принятое', ['KeyI'], () => send({ t: 'cw_ai_analyze' })],
+    ['cwreply', 'CW', 'ИИ: составить ответ', ['KeyY'], () => send({ t: 'cw_ai_reply' })],
+    ['cwtext', 'CW', 'Перейти к тексту для передачи', ['Backquote'], () => { $('#tabs button[data-tab="cw"]').click(); $('#cwText').focus(); }],
   ];
   for (let n = 1; n <= 5; n++) A.push(['cw' + n, 'CW', `Передать CW-память ${n}`, ['Shift+Digit' + n], () => { act('cw_play', n); note('CW-память ' + n); }]);
   const actions = A.map(([id, group, name, def, down, up, repeat]) => ({ id, group, name, def, down, up, repeat }));
