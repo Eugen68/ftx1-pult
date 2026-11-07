@@ -194,7 +194,9 @@ class RttyDecoder:
         s = self.spec
         if len(s) < 8192:
             return None, None
-        sp = np.abs(np.fft.rfft(s[-8192:] * np.hanning(8192))) ** 2
+        win = np.hanning(8192)
+        sp = sum(np.abs(np.fft.rfft(s[i:i + 8192] * win)) ** 2
+                 for i in range(len(s) - 8192, -1, -4096)[:3])
         f = np.fft.rfftfreq(8192, 1 / self.FS)
         old = getattr(self, 'psd', None)
         self.psd = sp if old is None or len(old) != len(sp) else 0.6 * old + 0.4 * sp
@@ -218,7 +220,8 @@ class RttyDecoder:
             return None
         c, sc = self._scores(f, sm, 0, 4000)
         noise = np.median(sm[(f > 200) & (f < 3500)])
-        if not len(sc) or sc.max() < noise * 10:
+        # пара считается найденной, если оба тона хотя бы вдвое (на 3 дБ) выше шума — слабые станции тоже ловим
+        if not len(sc) or sc.max() < noise * 2:
             return None
         self.fc = float(c[int(np.argmax(sc))])
         self.reset()
@@ -238,9 +241,9 @@ class RttyDecoder:
         if not len(sc):
             return
         k = int(np.argmax(sc))
-        if sc[k] > noise * 8 and sc[k] > 2.5 * max(cur, noise) and abs(c[k] - self.fc) > 6:
+        if sc[k] > noise * 3 and sc[k] > 2.5 * max(cur, noise) and abs(c[k] - self.fc) > 6:
             self.fc = float(c[k])
-        elif sc[k] > noise * 8:                       # тонкая подстройка в пределах ±15 Гц
+        elif sc[k] > noise * 2:                       # тонкая подстройка в пределах ±15 Гц
             near = np.abs(c - self.fc) <= 15
             if near.any():
                 j = np.nonzero(near)[0][int(np.argmax(sc[near]))]
