@@ -631,7 +631,7 @@ class Station:
     # ----- клиент пульта
     async def handle_ws(self, ws):
         ip = ws.peer[0] if ws.peer else ''
-        local = ip in ('127.0.0.1', '::1', '::ffff:127.0.0.1')
+        local = ip in ('127.0.0.1', '::1', '::ffff:127.0.0.1') and not os.environ.get('FTX_TEST_REMOTE')
         c = Client(ws, local)
         self.clients.add(c)
         try:
@@ -703,8 +703,12 @@ class Station:
             else:
                 msg = ('Удалённый доступ выключен: задайте пароль в панели управления на ПК с трансивером'
                        if not pw else 'Неверный пароль')
-                log.warning("Отказ в доступе %s: %s", c.name, 'нет пароля на сервере' if not pw else 'неверный пароль')
-                c.ws.send_json({'t': 'auth_fail', 'msg': msg})
+                first = not m.get('pw')
+                if not first:
+                    log.warning("Отказ в доступе %s: %s", c.name, 'нет пароля на сервере' if not pw else 'неверный пароль')
+                    c.fails = getattr(c, 'fails', 0) + 1
+                    await asyncio.sleep(min(5, 0.7 * c.fails))     # от перебора паролей; соединение не рвём
+                c.ws.send_json({'t': 'auth_fail', 'msg': msg, 'first': first and bool(pw)})
             return
         if not c.authed:
             return

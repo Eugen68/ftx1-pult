@@ -98,6 +98,7 @@ function connect() {
     switch (m.t) {
       case 'hello_ok':
         C.authed = true; C.local = m.local; C.info = m;
+        if (!m.local && C.pw) store.set('pw', C.pw);
         if (!C.rate) {                                   // первый вход: на этом ПК — максимальное качество
           C.rate = m.local ? 48000 : 16000; $('#optRate').value = C.rate;
           C.player && C.player.port.postMessage({ rate: C.rate });
@@ -113,7 +114,12 @@ function connect() {
         if (C.audioOn) send({ t: 'audio', on: true, rate: C.rate });
         break;
       case 'auth_fail':
-        $('#login').classList.remove('hidden'); $('#loginMsg').textContent = m.msg; break;
+        if (C.pw) { store.set('pw', ''); }          // неверный сохранённый пароль больше не подставляем
+        C.pw = '';
+        $('#login').classList.remove('hidden');
+        $('#loginMsg').textContent = m.first ? 'Введите пароль сервера' : m.msg;
+        $('#loginPw').value = ''; setTimeout(() => $('#loginPw').focus(), 50);
+        break;
       case 'state': applyState(m.s, m.full); if (Object.keys(m.s).some(k => /^fw\d$|^radio_id$/.test(k))) renderFw(); break;
       case 'lv': break;
       case 'bw': C.bw = m.hz; updateSpan(); break;
@@ -1007,8 +1013,10 @@ function initOpts() {
 
 // ------------------------------------------------------------------ вход, полноэкранный режим, PWA
 $('#loginBtn').onclick = () => {
-  C.pw = $('#loginPw').value; store.set('pw', C.pw);
-  send({ t: 'hello', pw: C.pw, rate: C.rate });
+  C.pw = $('#loginPw').value;              // запоминаем, только когда сервер пароль принял (hello_ok)
+  $('#loginMsg').textContent = 'Проверяю…';
+  if (C.ws && C.ws.readyState === 1) send({ t: 'hello', pw: C.pw, rate: C.rate || 16000 });
+  else { try { C.ws && C.ws.close(); } catch { } connect(); }
 };
 $('#loginPw').addEventListener('keydown', e => { if (e.key === 'Enter') $('#loginBtn').click(); });
 $('#btnPanel').onclick = () => window.open('panel.html', 'ftx1panel', 'width=1080,height=860');
