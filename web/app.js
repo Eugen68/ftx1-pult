@@ -122,7 +122,7 @@ function connect() {
         break;
       case 'state': applyState(m.s, m.full); if (Object.keys(m.s).some(k => /^fw\d$|^radio_id$/.test(k))) renderFw(); break;
       case 'lv': break;
-      case 'bw': C.bw = m.hz; updateSpan(); break;
+      case 'bw': C.bw = m.hz; onBw(m.hz); break;
       case 'ptt_owner':
         C.txOwner = m.you; C.pttBusy = m.busy && !m.you;
         if (C.txOwner && !C.txStart) C.txStart = performance.now();
@@ -188,7 +188,7 @@ function applyState(d, full) {
   drawOverlay();
   if ('tuning' in d) $('#tuneState').textContent = S.tuning ? 'Идёт настройка…' : '';
   if ('tx' in d) document.body.classList.toggle('txon', !!S.tx);
-  if ('mode' in d) { if (!C.wfMax && !C.bw) updateSpan(); renderSq(); pushGate(); }
+  if ('mode' in d) { C.autoLock = null; C.bwHist = []; updateSpan(true); renderSq(); pushGate(); renderCenterBtn(); }
   if ('busy' in d || 'tx' in d) pushGate();
   if ('sql' in d) renderSq();
 }
@@ -526,7 +526,15 @@ function sizeCanvases() {
   wf.rows = Math.max(50, Math.round(wf.canvas.clientHeight));
   drawOverlay();
 }
+// AM/FM: на водопад приходит уже продетектированный звук, несущей в нём нет. Чтобы картинка
+// была привычной (сигнал по центру), показываем звук зеркально: 0 Гц в середине, ±частоты по краям.
+const mirrored = () => opts.fmCenter !== false && isAMFM(S.mode);
 function wfRow(row, binHz) {
+  if (mirrored()) {
+    const n0 = row.length, r2 = new Uint8Array(n0 * 2 - 1);
+    for (let i = 0; i < n0; i++) { r2[n0 - 1 - i] = row[i]; r2[n0 - 1 + i] = row[i]; }
+    row = r2;
+  }
   if (!wf.lut) buildLut();
   const n = row.length;
   wf.binHz = binHz;
@@ -555,7 +563,8 @@ function drawSpectrum() {
   const span = C.span;
   ctx.beginPath();
   for (let x = 0; x < W; x++) {
-    const hz = x / W * span, i = Math.min(a.length - 1, Math.round(hz / wf.binHz));
+    const i = mirrored() ? Math.min(a.length - 1, Math.round(x / W * (a.length - 1)))
+      : Math.min(a.length - 1, Math.round(x / W * span / wf.binHz));
     const y = H - clamp((a[i] / 2 - 130 - floor) / range, 0, 1) * (H - 4);
     x ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   }
@@ -573,10 +582,13 @@ function passband() {
 }
 function drawOverlay() {
   const c = wf.ov; if (!c.width) return;
-  const ctx = c.getContext('2d'), W = c.width, H = c.height, span = C.span, X = hz => hz / span * W;
+  const mir = mirrored();
+  const ctx = c.getContext('2d'), W = c.width, H = c.height, span = C.span,
+    X = hz => mir ? (0.5 + hz / (2 * span)) * W : hz / span * W;
   const dpr = W / c.clientWidth;
   ctx.clearRect(0, 0, W, H);
-  const [lo, hi] = passband();
+  let [lo, hi] = passband();
+  if (mir) lo = -hi;
   ctx.fillStyle = 'rgba(255,255,255,.07)'; ctx.fillRect(X(lo), 0, X(hi) - X(lo), H);
   ctx.strokeStyle = 'rgba(255,211,77,.7)'; ctx.lineWidth = dpr;
   ctx.beginPath(); ctx.moveTo(X(lo), 0); ctx.lineTo(X(lo), H); ctx.moveTo(X(hi), 0); ctx.lineTo(X(hi), H); ctx.stroke();
@@ -595,9 +607,16 @@ function drawOverlay() {
   ctx.font = `${11 * dpr}px Consolas, monospace`; ctx.fillStyle = 'rgba(220,235,245,.75)';
   ctx.strokeStyle = 'rgba(255,255,255,.12)';
   for (let hz = stepK; hz < span; hz += stepK) {
-    const x = X(hz);
-    ctx.beginPath(); ctx.moveTo(x, H * 0.28 - 6 * dpr); ctx.lineTo(x, H * 0.28); ctx.stroke();
-    ctx.fillText((hz / 1000).toFixed(stepK < 1000 ? 1 : 0) + 'k', x + 3 * dpr, H * 0.28 - 4 * dpr);
+    for (const sg of mir ? [-1, 1] : [1]) {
+      const x = X(sg * hz);
+      ctx.beginPath(); ctx.moveTo(x, H * 0.28 - 6 * dpr); ctx.lineTo(x, H * 0.28); ctx.stroke();
+      ctx.fillText((sg < 0 ? '−' : mir ? '+' : '') + (hz / 1000).toFixed(stepK < 1000 ? 1 : 0) + 'k', x + 3 * dpr, H * 0.28 - 4 * dpr);
+    }
+  }
+  if (mir) {                                         // центр = частота настройки
+    ctx.strokeStyle = 'rgba(255,211,77,.9)'; ctx.setLineDash([5 * dpr, 4 * dpr]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255,211,77,.95)'; ctx.fillText(fmtFreq(S.freq_a || 0), W / 2 + 4 * dpr, 14 * dpr);
   }
 }
 function audioToRf(a) {
@@ -614,7 +633,10 @@ function tuneToAudio(a) {
 }
 (() => {
   const w = $('#wfWrap'), cur = $('#wfCursor');
-  const aAt = e => { const r = w.getBoundingClientRect(); return clamp((e.clientX - r.left) / r.width, 0, 1) * C.span; };
+  const aAt = e => {
+    const r = w.getBoundingClientRect(), f = clamp((e.clientX - r.left) / r.width, 0, 1);
+    return mirrored() ? Math.abs(f * 2 - 1) * C.span : f * C.span;
+  };
   w.addEventListener('pointermove', e => {
     const a = aAt(e), r = w.getBoundingClientRect();
     cur.style.display = 'block'; cur.style.left = (e.clientX - r.left) + 'px';
@@ -637,10 +659,24 @@ function tuneToAudio(a) {
 })();
 // Обзор водопада. «Авто» — по измеренной полосе звука трансивера (в FM она шире, чем в SSB),
 // пока не измерена — по виду работы.
+// Авто-обзор: по измеренной полосе звука, но без дёрганья — только стандартные шаги,
+// решение после 3 одинаковых замеров подряд, дальше обзор только расширяется, а сбрасывается
+// при смене вида работы.
+const SPAN_STEPS = [3000, 4000, 6000, 8000, 12000, 24000];
 function autoSpan() {
-  if (C.bw) return clamp(Math.ceil(C.bw * 1.05 / 500) * 500, 2000, 24000);
   const m = S.mode || '';
-  return /FM|C4FM/.test(m) ? 9000 : /^AM/.test(m) ? 6000 : isCW(m) ? 3000 : 4000;
+  if (C.autoLock && C.autoLock.mode === m) return C.autoLock.span;
+  return /FM|C4FM/.test(m) ? 4000 : /^AM/.test(m) ? 4000 : isCW(m) ? 3000 : 4000;
+}
+function onBw(hz) {
+  const m = S.mode || '';
+  const cand = SPAN_STEPS.find(v => v >= hz * 1.05) || 24000;
+  const L = C.autoLock && C.autoLock.mode === m ? C.autoLock : null;
+  C.bwHist = (C.bwHist || []).concat(cand).slice(-5);
+  const same = n => C.bwHist.length >= n && C.bwHist.slice(-n).every(v => v === C.bwHist[C.bwHist.length - 1]);
+  if (!L && same(3)) C.autoLock = { mode: m, span: cand };
+  else if (L && cand > L.span && same(5)) L.span = cand;
+  updateSpan();
 }
 function updateSpan(force) {
   const span = C.wfMax || autoSpan();
@@ -654,6 +690,13 @@ function updateSpan(force) {
 $$('#spanSeg button').forEach(b => {
   b.onclick = () => { C.wfMax = +b.dataset.v; store.set('wfMax', C.wfMax); updateSpan(true); };
 });
+function renderCenterBtn() {
+  const b = $('#wfCenter'); if (!b) return;
+  b.classList.toggle('hidden', !isAMFM(S.mode));
+  b.classList.toggle('on', opts.fmCenter !== false);
+}
+$('#wfCenter').onclick = () => { opts.fmCenter = opts.fmCenter === false; saveOpts(); renderCenterBtn(); updateSpan(true); };
+renderCenterBtn();
 window.addEventListener('resize', sizeCanvases);
 
 // ------------------------------------------------------------------ шумодав
