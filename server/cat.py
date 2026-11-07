@@ -419,6 +419,19 @@ class Rig:
                 log.exception("Ошибка цикла CAT: %s", e)
                 await asyncio.sleep(0.5)
 
+    def refresh(self, delay=0.0):
+        """Перечитать из трансивера все регуляторы сразу (при подключении пульта, смене диапазона/вида)."""
+        async def go():
+            if delay:
+                await asyncio.sleep(delay)
+            band = str(band_type(self.state.get('freq_a', 0)))
+            for c in ['FA;', 'FB;', 'MD0;'] + SLOW:
+                c = c.replace('{band}', band)
+                if self._unsupported.get(c, 0) < 3:
+                    self.send(c)
+        if self.loop:
+            self.loop.call_soon_threadsafe(lambda: asyncio.ensure_future(go()))
+
     async def _poll(self, cmd):
         r = await self._xfer(cmd)
         if r == '?':
@@ -524,7 +537,7 @@ class Rig:
         elif key == 'width':
             cmds = ['SH00%02d;' % clamp(v, 0, 23)]
         elif key == 'agc':
-            cmds = ['GT0%d;' % clamp(v, 0, 4)]
+            cmds = ['GT0%d;' % clamp(v, 0, 4), 'GT0;']       # 5/6 — это ответы AUTO-MID/SLOW, ставится AUTO
         elif key == 'preamp':
             cmds = ['PA%d%d;' % (band, clamp(v, 0, 2 if band == 0 else 1))]
         elif key == 'att':
@@ -598,6 +611,8 @@ class Rig:
             if not readback:
                 readback = cmds[0][:3] + ';' if len(q) <= 3 else q + ';'
             self.send(readback)
+            if key == 'mode' or (key == 'freq_a' and band_type(int(float(v))) != band):
+                self.refresh(0.3)       # у каждого вида/диапазона свои полоса, АРУ, предусилитель
         return cmds
 
     def action(self, name, arg=None):
@@ -631,4 +646,6 @@ class Rig:
                 self.send(c)
             for c in ('FA;', 'FB;', 'MD0;', 'AC;'):
                 self.send(c)
+            if name in ('band', 'band_up', 'band_down', 'mem_ch', 'vfo_mode', 'mem_mode', 'qmb_recall', 'swap', 'b_to_a'):
+                self.refresh(0.4)       # трансивер сам восстановил полосу/АРУ/фильтры диапазона — читаем их
         return a or []

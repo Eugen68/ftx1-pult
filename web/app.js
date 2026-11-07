@@ -388,12 +388,10 @@ for (const b of BANDS) {
   const el = document.createElement('button');
   el.className = 'btn'; el.dataset.b = b[0];
   el.textContent = /^\d+$/.test(b[0]) ? (b[0] === '70' ? '70см' : b[0] + 'м') : b[0];
-  el.onclick = () => {
-    rememberBand();
-    const [f, m] = bandMem[b[0]] || [b[3], b[4]];
-    setFreq(f);
-    if (m && m !== S.mode) setTimeout(() => setParam('mode', m), 120);
-  };
+  // кнопка диапазона = кнопка BAND на трансивере: он сам восстанавливает свою частоту, вид работы,
+  // полосу и прочее для этого диапазона (код BS совпадает с порядком в BANDS)
+  const code = BANDS.indexOf(b);
+  el.onclick = () => act('band', code);
   $('#bands').appendChild(el);
 }
 for (const m of MODES) {
@@ -1537,7 +1535,7 @@ const HOTKEYS = (() => {
       note('Предусилитель: ' + (bandType() ? onOff(v) : ['IPO', 'AMP1', 'AMP2'][v]));
     }],
     ['agc', 'Приёмник', 'АРУ: FAST → MID → SLOW → AUTO', ['KeyG'], () => {
-      const v = ((S.agc | 0) % 4) + 1; setParam('agc', v); renderControls({ agc: v }); note('АРУ: ' + ['OFF', 'FAST', 'MID', 'SLOW', 'AUTO'][v]);
+      const v = (Math.min(S.agc | 0, 4) % 4) + 1; setParam('agc', v); renderControls({ agc: v }); note('АРУ: ' + ['OFF', 'FAST', 'MID', 'SLOW', 'AUTO'][v]);
     }],
     ['narrow', 'Приёмник', 'Узкий фильтр NAR', [], () => toggle('narrow', 'NAR')],
     ['sq', 'Приёмник', 'Шумодав пульта (FM): выкл → по ТРХ → по уровню', ['KeyQ'], () => {

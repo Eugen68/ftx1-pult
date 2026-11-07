@@ -664,6 +664,8 @@ class Station:
                                 'audio_err': self.audio_err, 'ctcss': CTCSS, 'running': self.running,
                                 'max_tx': self.cfg['max_tx_seconds'], 'ptt_method': self.cfg['ptt_method']})
                 c.ws.send_json({'t': 'state', 's': self.rig.state if self.rig else {'connected': False}, 'full': True})
+                if self.rig:
+                    self.rig.refresh()                     # свежие значения из трансивера, а не из памяти
                 c.ws.send_json({'t': 'audio_status', 'err': self.audio_err if self.running else 'Связь с трансивером остановлена'})
                 if self.wf.bandwidth:
                     c.ws.send_json({'t': 'bw', 'hz': self.wf.bandwidth})
