@@ -122,10 +122,11 @@ class WebSocket:
 
 
 class WebServer:
-    def __init__(self, static_dir, ws_handler, extra_routes=None):
+    def __init__(self, static_dir, ws_handler, extra_routes=None, prefix_routes=None):
         self.static_dir = os.path.abspath(static_dir)
         self.ws_handler = ws_handler          # async fn(WebSocket)
         self.routes = extra_routes or {}      # path -> fn() -> (ctype, bytes)
+        self.prefix = prefix_routes or {}     # '/rec/' -> fn(остаток, query) -> (ctype, bytes) | None
 
     async def handle(self, reader, writer):
         peer = writer.get_extra_info('peername')
@@ -142,7 +143,7 @@ class WebServer:
                     break
                 k, _, v = h.decode('latin-1').partition(':')
                 headers[k.strip().lower()] = v.strip()
-            path = path.split('?', 1)[0]
+            path, _, query = path.partition('?')
 
             if path == '/ws' and headers.get('upgrade', '').lower() == 'websocket':
                 key = headers.get('sec-websocket-key', '')
@@ -168,6 +169,12 @@ class WebServer:
             if path in self.routes:
                 ctype, body = self.routes[path]()
                 return await self._send(writer, 200, ctype, body)
+            for pre, fn in self.prefix.items():
+                if path.startswith(pre):
+                    r = fn(path[len(pre):], query)
+                    if not r:
+                        return await self._send(writer, 404, 'text/plain', b'Not found')
+                    return await self._send(writer, 200, r[0], r[1])
             if path == '/':
                 path = '/index.html'
             full = os.path.abspath(os.path.join(self.static_dir, path.lstrip('/')))

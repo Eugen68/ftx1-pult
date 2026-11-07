@@ -3,6 +3,7 @@
 (шум + несколько сигналов) вместо USB-звука. Нужен, чтобы проверить
 пульт без трансивера:  python main.py --sim
 """
+import os
 import threading
 import time
 import re
@@ -255,6 +256,12 @@ class SimDigi:
         return out
 
 
+DUMP = [] if os.environ.get('FTX_TX_DUMP') else None
+if DUMP is not None:
+    import atexit
+    atexit.register(lambda: np.save(os.environ['FTX_TX_DUMP'], np.concatenate(DUMP) if DUMP else np.zeros(1)))
+
+
 class SimAudio:
     """«Эфир»: шум + CW + FT8-подобные тоны + SSB-подобный сигнал."""
 
@@ -276,6 +283,10 @@ class SimAudio:
                 on_rx(x)
                 y = self.tx.pull(BLOCK)
                 self.radio.tx_level = float(np.sqrt(np.mean(y * y)))
+                if DUMP is not None and self.radio.s['TX'] != '0':          # отладка: что «ушло в эфир»
+                    DUMP.append(y.copy())
+                    if len(DUMP) % 50 == 0:
+                        np.save(os.environ['FTX_TX_DUMP'], np.concatenate(DUMP))
                 next_t += BLOCK / SR
                 time.sleep(max(0, next_t - time.monotonic()))
         threading.Thread(target=run, daemon=True).start()

@@ -43,6 +43,7 @@ from webserver import WebServer  # noqa: E402
 from cwdesk import CwDesk  # noqa: E402
 from digidesk import DigiDesk  # noqa: E402
 from voicecq import VoiceCq  # noqa: E402
+from recorder import QsoRecorder  # noqa: E402
 
 VERSION = "1.8"
 APP_NAME = "FTX-1 Пульт"
@@ -309,6 +310,7 @@ class Station:
         self.cw = CwDesk(self)
         self.digi = DigiDesk(self, BASE)
         self.vk = VoiceCq(self, BASE)
+        self.rec = QsoRecorder(BASE)
         LOGBUF.listeners.append(self._on_log)
 
     def save_cfg(self):
@@ -361,6 +363,7 @@ class Station:
                                    "(WSJT-X, N1MM, Log4OM…) или выбран не тот порт." % (cfg['cat_port'], e))
             self.rig = rig
             self.audio = audio
+            audio.tx.tap = self.rec.tap_tx
             try:
                 audio.start(self._rx_from_thread)
                 log.info("Звук трансивера подключён")
@@ -383,6 +386,9 @@ class Station:
         self.cw.stop()
         self.digi.stop()
         self.vk.stop()
+        if self.rec.on:
+            self.rec.stop()
+            self.broadcast(self.rec_state())
         if self.ptt_owner:
             self.set_ptt(None, False)
             await asyncio.sleep(0.15)
@@ -409,6 +415,7 @@ class Station:
 
     # ----- приём звука: раздаём клиентам и строим водопад
     def _on_rx_audio(self, x):
+        self.rec.feed_rx(x)
         need = {c.rate for c in self.clients if c.audio and c.authed}
         for rate in need:
             y = self.decims[rate].process(x)
@@ -540,6 +547,15 @@ class Station:
             'ptt_owner': self.ptt_owner.name if self.ptt_owner else '',
         }
 
+    def rec_download(self, rest, query):
+        from urllib.parse import parse_qs, unquote
+        data = self.rec.read(unquote(rest), (parse_qs(query).get('k') or [''])[0])
+        return ('audio/wav', data) if data is not None else None
+
+    def rec_state(self):
+        return {'t': 'rec_state', 'on': self.rec.on, 'name': self.rec.name, 'elapsed': self.rec.elapsed(),
+                'files': self.rec.files(), 'k': self.rec.token}
+
     def push_status(self):
         self._send_admin({'t': 'admin_status', 's': self.status()})
 
@@ -633,7 +649,10 @@ class Station:
                     except Exception as e:
                         log.exception("Ошибка обработки %s: %s", m.get('t'), e)
                 elif kind == 'bin' and c.authed and data[:1] == b'\x03':
-                    self._on_tx_audio(c, data[1:])
+                    if len(data) > 2 and data[1] in (1, 2, 6) and len(data) % 2 == 0:
+                        self._on_tx_audio(c, data[2:], data[1] * 8000)
+                    else:                                   # старый пульт без частоты в кадре
+                        self._on_tx_audio(c, data[1:], c.rate)
         finally:
             self.clients.discard(c)
             if self.ptt_owner is c:
@@ -646,12 +665,12 @@ class Station:
                 log.info("Отключился %s", c.name)
                 self.push_status()
 
-    def _on_tx_audio(self, c, pcm):
+    def _on_tx_audio(self, c, pcm, rate):
         if self.ptt_owner is not c or not self.audio:
             return
         x = np.frombuffer(pcm, '<i2').astype(np.float32) / 32768.0
-        if c.interp is None or c.interp.f != SR // c.rate:
-            c.interp = Interpolator(SR // c.rate)
+        if c.interp is None or c.interp.f != SR // rate:
+            c.interp = Interpolator(SR // rate)
         self.audio.tx.push(c.interp.process(x))
 
     async def _on_msg(self, c, m):
@@ -691,6 +710,21 @@ class Station:
             return
         if t.startswith('cw_'):
             await self.cw.on_msg(c, m)
+            return
+        if t in ('rec_start', 'rec_stop', 'rec_hello'):
+            if t == 'rec_start' and self.running and self.audio and not self.audio_err:
+                st = self.rig.state if self.rig else {}
+                name = self.rec.start(st.get('freq_a') or 0, st.get('mode') or '')
+                log.info("Запись связи: %s", name)
+            elif t == 'rec_start':
+                c.ws.send_json({'t': 'note', 'msg': 'Запись невозможна: звук трансивера не подключён'})
+            elif t == 'rec_stop' and self.rec.on:
+                log.info("Запись связи остановлена: %s (%d с)", self.rec.name, self.rec.elapsed())
+                self.rec.stop()
+            if t == 'rec_hello':
+                c.ws.send_json(self.rec_state())
+            else:
+                self.broadcast(self.rec_state())
             return
         if t.startswith('vk_'):
             await self.vk.on_msg(c, m)
@@ -857,7 +891,8 @@ async def amain(args):
     st = Station(cfg, force_sim=args.sim)
     await st.init()
 
-    app = WebServer(web_dir(), st.handle_ws, {'/api/ping': lambda: ('text/plain', b'FTX1-PULT ' + VERSION.encode())})
+    app = WebServer(web_dir(), st.handle_ws, {'/api/ping': lambda: ('text/plain', b'FTX1-PULT ' + VERSION.encode())},
+                    {'/rec/': st.rec_download})
     servers = []
     http_host = '0.0.0.0' if cfg.get('http_lan') else '127.0.0.1'
     try:

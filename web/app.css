@@ -372,3 +372,10 @@ body.fit .cw-screen { max-height: 30vh; }
 .opt-more { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
 .opt-more summary { cursor: pointer; color: var(--muted); }
 .opt-more[open] { display: grid; gap: 8px; }
+
+/* ---------- запись QSO */
+#btnRec.on { background: #c62f3a; color: #fff; border-color: #e5484d; animation: recblink 1.2s infinite; }
+@keyframes recblink { 50% { opacity: .65; } }
+.rec-list { display: grid; gap: 4px; }
+.rec-list a { color: var(--acc, #39c5e0); text-decoration: none; }
+.rec-list .row { display: flex; gap: 10px; align-items: center; }

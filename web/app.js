@@ -102,13 +102,14 @@ function connect() {
           C.rate = m.local ? 48000 : 16000; $('#optRate').value = C.rate;
           C.player && C.player.port.postMessage({ rate: C.rate });
         }
+        send({ t: 'audio', on: C.audioOn, rate: C.rate });
         $('#login').classList.add('hidden');
         $('#btnPanel').classList.toggle('hidden', !m.local);
         fillSelect($('.ctl[data-k=ctcss] select'), m.ctcss.map((v, i) => [i, v.toFixed(1)]));
         $('#srvInfo').textContent = `Сервер v${m.version}. PTT: ${m.ptt_method}. Ограничение передачи: ${m.max_tx} с.` + (m.audio_err ? ` ЗВУК: ${m.audio_err}` : '');
         setWfMsg(m.audio_err);
         updateSpan(true);
-        send({ t: 'cw_hello' }); cwDesk.resend(); digiDesk.resend(); voiceCq.hello();
+        send({ t: 'cw_hello' }); cwDesk.resend(); digiDesk.resend(); voiceCq.hello(); qsoRec.hello();
         if (C.audioOn) send({ t: 'audio', on: true, rate: C.rate });
         break;
       case 'auth_fail':
@@ -130,6 +131,7 @@ function connect() {
         if (m.t && m.t.startsWith('cw_')) cwDesk.on(m);
         else if (m.t && (m.t.startsWith('rt_') || m.t.startsWith('fax_'))) digiDesk.on(m);
         else if (m.t && m.t.startsWith('vk_')) voiceCq.on(m);
+        else if (m.t === 'rec_state') qsoRec.on(m);
     }
   };
 }
@@ -765,16 +767,17 @@ async function startMic() {
   const lp = new BiquadFilterNode(ac, { type: 'lowpass', frequency: C.rate === 8000 ? 3200 : 3800, Q: 0.7 });
   C.micGainNode = new GainNode(ac, { gain: opts.micGain / 100 });
   C.micNode = new AudioWorkletNode(ac, 'mic-capture');
-  C.micNode.port.postMessage({ rate: C.rate });
+  C.micRate = C.rate; C.micNode.port.postMessage({ rate: C.rate });
   const sink = new GainNode(ac, { gain: 0 });
   src.connect(hp).connect(lp).connect(C.micGainNode).connect(C.micNode).connect(sink).connect(ac.destination);
   C.micNode.port.onmessage = e => {
     const { pcm, rms } = e.data;
     $('#micLevel').style.width = clamp((20 * Math.log10(rms + 1e-6) + 50) / 50, 0, 1) * 100 + '%';   // -50..0 дБ
     if (!C.txOwner || !C.pttPressed) return;
-    const b = new Uint8Array(1 + pcm.length * 2), dv = new DataView(b.buffer);
-    b[0] = 3;
-    for (let i = 0; i < pcm.length; i++) dv.setInt16(1 + i * 2, clamp(pcm[i], -1, 1) * 32767, true);
+    // [3][частота/8000][PCM int16]: частота едет с каждым кадром — сервер не может её перепутать
+    const b = new Uint8Array(2 + pcm.length * 2), dv = new DataView(b.buffer);
+    b[0] = 3; b[1] = C.micRate / 8000;
+    for (let i = 0; i < pcm.length; i++) dv.setInt16(2 + i * 2, clamp(pcm[i], -1, 1) * 32767, true);
     if (C.ws && C.ws.readyState === 1 && C.ws.bufferedAmount < 64000) C.ws.send(b);
   };
   updatePtt();
@@ -973,7 +976,7 @@ function initOpts() {
   $('#optRate').onchange = e => {
     C.rate = +e.target.value; store.set('rate', C.rate);
     C.player && C.player.port.postMessage({ rate: C.rate });
-    C.micNode && C.micNode.port.postMessage({ rate: C.rate });
+    if (C.micNode) { C.micRate = C.rate; C.micNode.port.postMessage({ rate: C.rate }); }
     send({ t: 'audio', on: C.audioOn, rate: C.rate });
   };
   $('#optMic').onchange = e => { opts.micId = e.target.value; saveOpts(); resetMic(); };
@@ -1545,6 +1548,7 @@ const HOTKEYS = (() => {
       setParam('preamp', v); S['preamp' + bandType()] = v; renderControls({ preamp: v });
       note('Предусилитель: ' + (bandType() ? onOff(v) : ['IPO', 'AMP1', 'AMP2'][v]));
     }],
+    ['rec', 'Приёмник', 'Запись связи на ПК — старт/стоп', ['KeyH'], () => qsoRec.toggle()],
     ['agc', 'Приёмник', 'АРУ: FAST → MID → SLOW → AUTO', ['KeyG'], () => {
       const v = (Math.min(S.agc | 0, 4) % 4) + 1; setParam('agc', v); renderControls({ agc: v }); note('АРУ: ' + ['OFF', 'FAST', 'MID', 'SLOW', 'AUTO'][v]);
     }],
@@ -1836,4 +1840,27 @@ const voiceCq = (() => {
     else if (m.t === 'vk_audio') playLocal(m);
   }
   return { on, hello: () => send({ t: 'vk_hello' }), stop: () => { if (st.run) send({ t: 'vk_stop' }); stopRec(); }, running: () => !!st.run };
+})();
+
+// ------------------------------------------------------------------ запись связи на ПК
+const qsoRec = (() => {
+  const st = { on: false, t0: 0, k: '', timer: 0 };
+  const btn = $('#btnRec');
+  const mmss = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  const kb = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' МБ' : Math.round(n / 1024) + ' КБ';
+  function tick() { btn.textContent = st.on ? '⏺ ' + mmss(Math.floor((Date.now() - st.t0) / 1000)) : '⏺ Запись'; }
+  btn.onclick = () => send({ t: st.on ? 'rec_stop' : 'rec_start' });
+  function on(m) {
+    const was = st.on;
+    st.on = m.on; st.k = m.k;
+    if (m.on) st.t0 = Date.now() - m.elapsed * 1000;
+    btn.classList.toggle('on', m.on);
+    clearInterval(st.timer); if (m.on) st.timer = setInterval(tick, 500); tick();
+    btn.title = m.on ? 'Идёт запись: ' + m.name + ' — нажмите, чтобы остановить' : 'Записать связь (приём и передачу) в файл на ПК с сервером';
+    $('#recList').innerHTML = (m.files || []).map(f =>
+      `<div class="row"><a href="rec/${encodeURIComponent(f.name)}?k=${encodeURIComponent(m.k)}" download="${f.name}">💾 ${f.name}</a>
+       <span class="muted">${mmss(f.dur)} · ${kb(f.size)}</span></div>`).join('') || '<span class="muted">Записей пока нет</span>';
+    if (was && !m.on && m.name) toast('Запись сохранена: ' + m.name + ' (папка records)', 6000);
+  }
+  return { on, hello: () => send({ t: 'rec_hello' }), toggle: () => btn.click() };
 })();

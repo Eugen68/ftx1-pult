@@ -135,6 +135,7 @@ class TxBuffer:
         self.max = SR * max_ms // 1000
         self.running = False
         self.level = 0.0
+        self.tap = None                   # запись QSO: копия того, что уходит в трансивер
 
     def push(self, x):
         with self.lock:
@@ -167,7 +168,9 @@ class TxBuffer:
                 out = np.concatenate([out, np.zeros(m - len(out), np.float32)])
             if m != n:
                 out = np.interp(np.linspace(0, m - 1, n), np.arange(m), out).astype(np.float32)
-            return out
+        if self.tap:
+            self.tap(out)
+        return out
 
     def clear(self):
         with self.lock:

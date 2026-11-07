@@ -27,6 +27,7 @@
   <div class="brand"><span class="dot" id="linkDot"></span><b>FTX-1</b><span id="rigInfo" class="muted small">нет связи</span></div>
   <div class="top-actions">
     <button id="btnAudio" class="btn chip" title="Звук приёмника на этом устройстве">🔇 Звук</button>
+    <button id="btnRec" class="btn chip rec" title="Записать связь (приём и передачу) в файл на ПК с сервером">⏺ Запись</button>
     <label class="vol" title="Громкость на этом устройстве"><input id="volume" type="range" min="0" max="200" value="100"></label>
     <button id="btnKeys" class="btn chip icon" title="Горячие клавиши (?)">⌨</button>
     <button id="btnPanel" class="btn chip icon hidden" title="Панель управления сервером">⚙</button>
@@ -426,6 +427,9 @@
           <select id="optPalette"><option value="classic">Классика</option><option value="yaesu">Синяя</option><option value="gray">Серая</option><option value="fire">Огонь</option></select></label>
         <p class="muted small" id="srvInfo"></p>
         <p class="muted small" id="fwInfo"></p>
+        <h4 style="margin-top:6px">Записи связей</h4>
+        <p class="muted small">Кнопка «⏺ Запись» вверху пишет приём и передачу в один файл WAV в папку <code>records</code> рядом с программой.</p>
+        <div id="recList" class="rec-list small"></div>
         <h4 style="margin-top:6px">Горячие клавиши</h4>
         <label class="chk"><input type="checkbox" id="optHotkeys" checked> Включены (справка — клавиша <kbd>?</kbd> или <kbd>F1</kbd>)</label>
         <div id="hkList" class="hk-list"></div>
