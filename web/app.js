@@ -66,8 +66,11 @@ const C = {                         // состояние клиента
   wfMax: store.get('wfMax', 0),          // выбранный обзор водопада, 0 = авто
   span: 4000, bw: 0,                      // действующий обзор и измеренная полоса звука трансивера
 };
-const opts = Object.assign({ echo: true, ns: true, agc: false, muteTx: true, pttMode: 'hold', space: true, palette: 'classic', micGain: 100, micId: '',
+const opts = Object.assign({ echo: false, ns: false, agc: false, muteTx: true, pttMode: 'hold', space: true, palette: 'classic', micGain: 100, micId: '',
   sqMode: 'radio', sqThr: -60, tail: 500, scale: 'auto', hotkeys: true }, store.get('opts', {}));
+if ((opts.v | 0) < 2) {           // 1.8: обработка браузера для эфира по умолчанию выключена (портила голос)
+  opts.echo = false; opts.ns = false; opts.agc = false; opts.v = 2; store.set('opts', opts);
+}
 
 // ------------------------------------------------------------------ связь
 function send(o) { if (C.ws && C.ws.readyState === 1) C.ws.send(JSON.stringify(o)); }

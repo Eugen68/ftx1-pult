@@ -98,56 +98,51 @@ function fillDevices() {
   $('#cw_port').innerHTML = portOpts(cfg.cw_port, 'standard');
   fillAudio();
 }
-// Звук: отдельно вход (приём) и выход (передача). Значение опции — «имя|API».
+// Звук: одна звуковая карта трансивера (вход + выход), драйвер — отдельно (по умолчанию авто).
 const isCodec = n => /usb audio (codec|device)/i.test(n);
-const coreName = n => { const m = /\(([^()]*)\)?\s*$/.exec(n); return ((m && m[1]) || n).replace(/^\s*\d+\s*-\s*/, '').trim().toLowerCase(); };
+const coreName = n => { const m = /\(([^()]*)\)?\s*$/.exec(n); return ((m && m[1]) || n).replace(/^\s*\d+\s*-\s*/, '').trim(); };
+const MAPPER = /переназначение|mapper|основной драйвер|primary sound/i;
 function fillAudio() {
-  const build = (kind, curName) => {
-    const list = audio.filter(d => d[kind] > 0);
-    const curKey = curName ? curName + '|' + (cfg.audio_api || '') : '';
-    let h = opt('', kind === 'in' ? 'Автоматически (USB Audio CODEC/Device)' : 'Автоматически (пара к входу)', !curName);
-    const seen = new Set(); let found = !curName;
-    // сначала устройства трансивера, потом остальные
-    for (const d of [...list.filter(d => isCodec(d.name)), ...list.filter(d => !isCodec(d.name))]) {
-      const key = d.name + '|' + d.api;
-      if (seen.has(key)) continue; seen.add(key);
-      const sel = curName && d.name === curName && (!cfg.audio_api || d.api === cfg.audio_api) && !found;
-      if (sel) found = true;
-      h += opt(key, `${isCodec(d.name) ? '★ ' : ''}${d.name} — ${d.api}`, sel);
-    }
-    if (!found) h += opt(curKey, `${curName} (не найдено)`, true);
-    return h;
-  };
-  $('#audio_in').innerHTML = build('in', cfg.audio_in_name);
-  $('#audio_out').innerHTML = build('out', cfg.audio_out_name);
+  // одно физическое устройство = одна строка, сколько бы драйверов Windows его ни показывали
+  const cores = new Map();
+  for (const d of audio) {
+    if (MAPPER.test(d.name)) continue;
+    const c = coreName(d.name), k = c.toLowerCase();
+    const e = cores.get(k) || { name: c, in: false, out: false };
+    e.in = e.in || d.in > 0; e.out = e.out || d.out > 0;
+    cores.set(k, e);
+  }
+  const both = [...cores.values()].filter(e => e.in && e.out);
+  both.sort((a, b) => isCodec(b.name) - isCodec(a.name));
+  const cur = cfg.audio_in_name ? coreName(cfg.audio_in_name) : '';
+  let h = opt('', 'Автоматически (USB Audio CODEC/Device)', !cur), found = !cur;
+  for (const e of both) {
+    const sel = !!cur && e.name.toLowerCase() === cur.toLowerCase();
+    if (sel) found = true;
+    h += opt(e.name, (isCodec(e.name) ? '★ ' : '') + e.name + (isCodec(e.name) ? ' — трансивер' : ''), sel);
+  }
+  if (!found) h += opt(cur, cur + ' (не найдено)', true);
+  $('#audio_dev').innerHTML = h;
+  $('#audio_api').value = cfg.audio_api || '';
+  if ($('#audio_api').value !== (cfg.audio_api || '')) $('#audio_api').value = '';
   audioHint();
 }
-function audioHint() {
-  const i = $('#audio_in').value.split('|')[0], o = $('#audio_out').value.split('|')[0];
+function audioHint(st) {
+  const d = $('#audio_dev').value;
   let t = '';
-  if (i && !isCodec(i)) t = '⚠ Для приёма выбрано не USB-устройство трансивера.';
-  else if (i && o && coreName(i) !== coreName(o)) t = '⚠ Вход и выход от разных устройств — проверьте, что оба от трансивера.';
-  else if (!audio.some(d => isCodec(d.name))) t = '⚠ USB-звук трансивера не виден: проверьте кабель и нажмите ↻.';
+  if (d && !isCodec(d)) t = '⚠ Выбрано не USB-устройство трансивера.';
+  else if (!audio.some(x => isCodec(x.name))) t = '⚠ USB-звук трансивера не виден: проверьте кабель и нажмите ↻.';
+  else if (st && st.audio_api_used) t = 'Сейчас звук идёт через ' + st.audio_api_used.replace('Windows ', '') + '.';
   $('#audioHint').textContent = t;
 }
-$('#audio_in').addEventListener('change', () => {
-  // подставить выход той же пары
-  const [name, api] = $('#audio_in').value.split('|');
-  if (name) {
-    const pair = audio.find(d => d.out > 0 && d.api === api && coreName(d.name) === coreName(name));
-    if (pair) $('#audio_out').value = pair.name + '|' + pair.api;
-  } else $('#audio_out').value = '';
-  audioHint();
-});
-$('#audio_out').addEventListener('change', audioHint);
+$('#audio_dev').addEventListener('change', () => audioHint());
 
 // ------------------------------------------------------------ сохранение
 function collect() {
-  const [audio_in_name, api_in] = $('#audio_in').value.split('|');
-  const [audio_out_name, api_out] = $('#audio_out').value.split('|');
+  const dev = $('#audio_dev').value;
   return {
     cat_port: $('#cat_port').value, cat_baud: +$('#cat_baud').value,
-    audio_in_name, audio_out_name, audio_api: api_in || api_out || '', audio_in_index: null, audio_out_index: null,
+    audio_in_name: dev, audio_out_name: dev, audio_api: $('#audio_api').value, audio_in_index: null, audio_out_index: null,
     ptt_method: $('#ptt_method').value, ptt_port: $('#ptt_port').value,
     simulate: $('#simulate').checked, password: $('#password').value,
     auto_connect: $('#auto_connect').checked, open_panel: $('#open_panel').checked, open_pult: $('#open_pult').checked,
@@ -224,6 +219,7 @@ function renderStatus(s) {
   err.classList.toggle('hidden', !err.textContent);
   $('#cCat').className = s.running ? (s.connected ? 'ok' : 'warn') : '';
   $('#cAudio').className = s.running ? (s.audio_ok ? 'ok' : 'bad') : '';
+  if (s.audio_api_used !== undefined && document.activeElement !== $('#audio_dev')) audioHint(s);
   $('#cTx').className = s.tx ? 'bad' : (s.running ? 'ok' : '');
   $('#cTxT').textContent = s.tx ? 'Передача' : 'Приём';
   $('#cCl').className = s.clients.length ? 'ok' : '';

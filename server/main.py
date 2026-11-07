@@ -263,7 +263,7 @@ def detect(ports, audio):
     from audio import guess_codec
     di, do = guess_codec(audio)
     if di and do:
-        out['audio_in_name'], out['audio_out_name'], out['audio_api'] = di['name'], do['name'], di['api']
+        out['audio_in_name'], out['audio_out_name'], out['audio_api'] = di['name'], do['name'], ''
     return out
 
 
@@ -533,6 +533,7 @@ class Station:
             'fw': st.get('fw0'), 'head': st.get('pwr_head'),
             'audio_ok': self.running and not self.audio_err, 'audio_err': self.audio_err,
             'audio_names': list(getattr(self.audio, 'names', ('', ''))) if self.audio else ['', ''],
+            'audio_api_used': getattr(self.audio, 'api_used', '') if self.audio else '',
             'error': self.last_error,
             'clients': [{'name': c.name, 'local': c.local, 'audio': c.audio, 'tx': c is self.ptt_owner}
                         for c in self.clients if c.authed and not c.admin],

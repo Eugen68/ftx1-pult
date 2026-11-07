@@ -131,7 +131,7 @@ class TxBuffer:
     def __init__(self, prefill_ms=80, max_ms=600):
         self.lock = threading.Lock()
         self.data = np.zeros(0, np.float32)
-        self.prefill = SR * prefill_ms // 1000
+        self.prefill = self.prefill0 = SR * prefill_ms // 1000
         self.max = SR * max_ms // 1000
         self.running = False
         self.level = 0.0
@@ -151,11 +151,22 @@ class TxBuffer:
                     self.running = True
                 else:
                     return np.zeros(n, np.float32)
-            out = self.data[:n]
-            self.data = self.data[n:]
-            if len(out) < n:                              # недобор — тишина и снова предзаполнение
+            # часы микрофона и звуковой карты трансивера чуть расходятся: вместо обрывов
+            # плавно подтягиваем запас — берём на 0,5 % больше/меньше и пересчитываем в n отсчётов
+            target = self.prefill + SR // 20
+            m = n
+            if len(self.data) > target + SR // 10:
+                m = n + max(1, n // 200)
+            elif len(self.data) < self.prefill // 2:
+                m = n - max(1, n // 200)
+            out = self.data[:m]
+            self.data = self.data[m:]
+            if len(out) < m:                              # недобор — тишина и предзаполнение с запасом
                 self.running = False
-                out = np.concatenate([out, np.zeros(n - len(out), np.float32)])
+                self.prefill = min(self.prefill + SR // 50, SR // 4)
+                out = np.concatenate([out, np.zeros(m - len(out), np.float32)])
+            if m != n:
+                out = np.interp(np.linspace(0, m - 1, n), np.arange(m), out).astype(np.float32)
             return out
 
     def clear(self):
@@ -163,6 +174,7 @@ class TxBuffer:
             self.data = np.zeros(0, np.float32)
             self.running = False
             self.level = 0.0
+            self.prefill = self.prefill0
 
 
 def list_devices(refresh=False):
@@ -193,6 +205,29 @@ def core_name(name):
     core = m.group(1) if m and m.group(1) else name
     core = _re.sub(r'^\s*\d+\s*-\s*', '', core)          # «4- » — номер экземпляра
     return core.strip().lower()
+
+
+# Порядок драйверов «Авто»: WDM-KS отдаёт звук в трансивер напрямую, мимо микшера Windows
+# (громкость, «улучшения», приглушение при звонках), поэтому передача через него чище всего.
+API_ORDER = ['Windows WDM-KS', 'Windows WASAPI', 'Windows DirectSound', 'MME']
+
+
+def find_pair(core, api):
+    """Вход и выход одного устройства (по общей части имени) у заданного драйвера."""
+    import sounddevice as sd
+    core = (core or '').lower()
+    ins, outs = [], []
+    for i, d in enumerate(sd.query_devices()):
+        if sd.query_hostapis(d['hostapi'])['name'] != api:
+            continue
+        c = core_name(d['name'])
+        if not (c == core or (core and core in d['name'].lower())):
+            continue
+        if d['max_input_channels'] > 0:
+            ins.append(i)
+        if d['max_output_channels'] > 0:
+            outs.append(i)
+    return (ins[0] if ins else None), (outs[0] if outs else None)
 
 
 def _api_prio(api, api_pref):
@@ -261,12 +296,36 @@ class SoundDeviceAudio:
         self.tx_gain = tx_gain
         self.on_rx = None
         self.streams = []
+        self.api_used = ''
         self.rx_level = 0.0
         self.names = ('', '')
 
     def start(self, on_rx):
         import sounddevice as sd
         self.on_rx = on_rx
+        if self.in_dev is None and self.out_dev is None:
+            core = core_name(self.in_name or self.out_name or '')
+            if not core:
+                gi, _ = guess_codec(list_devices())
+                core = core_name(gi['name']) if gi else ''
+            if core:
+                have = {sd.query_hostapis(i)['name'] for i in range(len(sd.query_hostapis()))}
+                apis = [self.api] if self.api else [a for a in API_ORDER if a in have]
+                errs = []
+                for api in apis:
+                    ind, outd = find_pair(core, api)
+                    if ind is None or outd is None:
+                        continue
+                    try:
+                        self._open(ind, outd)
+                        self.api_used = api
+                        return
+                    except Exception as e:
+                        errs.append('%s: %s' % (api, e))
+                        log.warning("Звук через %s не открылся: %s", api, e)
+                        self.stop()
+                if errs:
+                    raise RuntimeError('Звуковая карта трансивера не открылась (%s)' % '; '.join(errs))
         devs = list_devices()
         gi, go = guess_codec(devs)
         ind = self.in_dev if self.in_dev is not None else find_device(self.in_name, 'in', self.api)
@@ -288,8 +347,13 @@ class SoundDeviceAudio:
                 log.info("  звук [%d] %s (%s) in=%d out=%d", d['index'], d['name'], d['api'], d['in'], d['out'])
             raise RuntimeError("Не найден %s. Выберите устройства трансивера в панели управления "
                                "(список всех устройств — в журнале)." % ' и '.join(what))
+        self._open(ind, outd)
+
+    def _open(self, ind, outd):
+        import sounddevice as sd
         self.names = (sd.query_devices(ind)['name'], sd.query_devices(outd)['name'])
-        log.info("Звук: приём с [%s] %s, передача на [%s] %s", ind, self.names[0], outd, self.names[1])
+        api = sd.query_hostapis(sd.query_devices(outd)['hostapi'])['name']
+        log.info("Звук: приём с [%s] %s, передача на [%s] %s (%s)", ind, self.names[0], outd, self.names[1], api)
 
         self.overflows = self.underflows = 0
         self._last_report = time.monotonic()
@@ -316,11 +380,16 @@ class SoundDeviceAudio:
         # почти не влияет, её определяет буфер в браузере
         sin = sd.InputStream(device=ind, samplerate=SR, channels=1, dtype='float32',
                              blocksize=BLOCK, callback=in_cb, latency='high')
-        sout = sd.OutputStream(device=outd, samplerate=SR, channels=1, dtype='float32',
-                               blocksize=BLOCK, callback=out_cb, latency='high')
-        sin.start()
-        sout.start()
+        try:
+            sout = sd.OutputStream(device=outd, samplerate=SR, channels=1, dtype='float32',
+                                   blocksize=BLOCK, callback=out_cb, latency='high')
+            sin.start()
+            sout.start()
+        except Exception:
+            sin.close()
+            raise
         self.streams = [sin, sout]
+        self.tx.clear()
         log.info("Звук: задержка драйвера приём %.0f мс, передача %.0f мс", sin.latency * 1000, sout.latency * 1000)
 
     def stop(self):
@@ -330,3 +399,4 @@ class SoundDeviceAudio:
                 s.close()
             except Exception:
                 pass
+        self.streams = []

@@ -116,8 +116,17 @@
         <div class="row"><select id="cat_port"></select><button class="btn" id="btnRefresh" title="Обновить список">↻</button><button class="btn" id="btnDetect" title="Подобрать автоматически">Найти</button></div></label>
       <label class="field"><span>Скорость CAT (как в меню трансивера CAT RATE)</span>
         <select id="cat_baud"><option>4800</option><option>9600</option><option>19200</option><option>38400</option><option>115200</option></select></label>
-      <label class="field"><span>Звук С трансивера — приём, водопад (обычно «Микрофон (USB Audio …)»)</span><select id="audio_in"></select></label>
-      <label class="field"><span>Звук НА трансивер — передача (обычно «Динамики (USB Audio …)»)</span><select id="audio_out"></select></label>
+      <label class="field"><span>Звуковая карта трансивера (USB-звук FTX-1: приём и передача)</span><select id="audio_dev"></select></label>
+      <details class="advanced"><summary>Драйвер звука</summary>
+        <label class="field"><span>Драйвер Windows</span>
+          <select id="audio_api">
+            <option value="">Авто (рекомендуется: WDM-KS напрямую, иначе WASAPI…)</option>
+            <option value="Windows WDM-KS">WDM-KS — напрямую, мимо микшера Windows</option>
+            <option value="Windows WASAPI">WASAPI</option>
+            <option value="Windows DirectSound">DirectSound</option>
+            <option value="MME">MME</option>
+          </select></label>
+      </details>
       <div class="hint" id="audioHint"></div>
       <label class="field"><span>Как включать передачу (PTT)</span>
         <select id="ptt_method">

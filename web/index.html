@@ -409,11 +409,15 @@
         <div class="row"><button class="btn small" id="micTest" title="Включить микрофон без передачи и проверить уровень">🎙 Проверить микрофон</button>
           <span class="muted small" id="micTestRes">Передатчик при проверке не включается</span></div>
         <label>Усиление микрофона, % <input id="optMicGain" type="range" min="10" max="400" value="100"><span id="optMicGainV">100</span></label>
-        <label class="chk"><input type="checkbox" id="optEcho" checked> Эхоподавление</label>
-        <label class="chk"><input type="checkbox" id="optNs" checked> Шумоподавление микрофона</label>
-        <label class="chk"><input type="checkbox" id="optAgc"> Автоусиление микрофона (AGC браузера)</label>
-        <label class="chk"><input type="checkbox" id="optMuteTx" checked> Глушить приём во время передачи</label>
-        <label>Глушить «хвост» после передачи, мс <input id="optTail" type="range" min="0" max="2000" step="50" value="500"><span id="optTailV">500</span></label>
+        <details class="opt-more"><summary>Обработка микрофона в браузере и приглушение приёма</summary>
+          <p class="muted small">Для эфира лучше всего всё выключено: обработка браузера рассчитана на звонки и портит голос
+            (булькает, «съедает» слоги). Включайте эхоподавление, только если микрофон слышит колонки.</p>
+          <label class="chk"><input type="checkbox" id="optEcho"> Эхоподавление</label>
+          <label class="chk"><input type="checkbox" id="optNs"> Шумоподавление микрофона</label>
+          <label class="chk"><input type="checkbox" id="optAgc"> Автоусиление микрофона (AGC браузера)</label>
+          <label class="chk"><input type="checkbox" id="optMuteTx" checked> Глушить приём во время передачи</label>
+          <label>Глушить «хвост» после передачи, мс <input id="optTail" type="range" min="0" max="2000" step="50" value="500"><span id="optTailV">500</span></label>
+        </details>
         <label>Масштаб интерфейса
           <select id="optScale"><option value="auto">Авто — под размер экрана</option><option value="0.8">80 %</option><option value="0.9">90 %</option><option value="1">100 %</option><option value="1.1">110 %</option><option value="1.25">125 %</option><option value="1.5">150 %</option><option value="1.75">175 %</option><option value="2">200 %</option></select></label>
         <label>Кнопка PTT
