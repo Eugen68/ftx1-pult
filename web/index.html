@@ -180,6 +180,23 @@
         <button class="btn" data-act="atas_down">ATAS ▼</button>
         <span class="muted small" id="tuneState"></span>
       </div>
+
+      <div class="vk card-lite">
+        <div class="vk-head">
+          <b>📢 Автовызов голосом</b>
+          <span class="muted small">Запишите CQ — пульт будет передавать его по кругу, слушая эфир в паузах. PTT, Esc или «Стоп» — прекратить.</span>
+        </div>
+        <div class="vk-slots" id="vkSlots"></div>
+        <div class="vk-opts">
+          <label class="mini">Пауза, с<input type="number" id="vkPause" class="num" min="2" max="600" value="10"></label>
+          <label class="mini">Повторов<input type="number" id="vkRep" class="num" min="1" max="100" value="10"></label>
+          <label class="mini" title="Остановить автовызов, если в паузе появился сигнал не слабее">Стоп при сигнале
+            <select id="vkSig"><option value="0">не следить</option><option value="3">S3</option><option value="5" selected>S5</option><option value="7">S7</option><option value="9">S9</option></select></label>
+          <button class="btn" id="vkStop">■ Стоп автовызова</button>
+          <span class="cw-meter mono" id="vkStatus">—</span>
+        </div>
+        <input type="file" id="vkFile" accept="audio/*" class="hidden">
+      </div>
     </div>
 
     <div class="tab" id="tab-vfo">

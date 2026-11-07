@@ -147,7 +147,7 @@ class DigiDesk:
             return self._tx_fail(c, 'Связь с трансивером не запущена')
         if self.tx_busy:
             return self._tx_fail(c, 'Передача уже идёт')
-        if self.st.ptt_owner is not None or self.st.cw.sender.busy:
+        if self.st.ptt_owner is not None or self.st.cw.sender.busy or self.st.vk.task:
             return self._tx_fail(c, 'Передатчик занят (голос или CW)')
         if not mode.startswith('DATA'):
             return self._tx_fail(c, 'Для RTTY через звук переключите трансивер в режим DATA-L или DATA-U '

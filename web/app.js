@@ -105,7 +105,7 @@ function connect() {
         $('#srvInfo').textContent = `Сервер v${m.version}. PTT: ${m.ptt_method}. Ограничение передачи: ${m.max_tx} с.` + (m.audio_err ? ` ЗВУК: ${m.audio_err}` : '');
         setWfMsg(m.audio_err);
         updateSpan(true);
-        send({ t: 'cw_hello' }); cwDesk.resend(); digiDesk.resend();
+        send({ t: 'cw_hello' }); cwDesk.resend(); digiDesk.resend(); voiceCq.hello();
         if (C.audioOn) send({ t: 'audio', on: true, rate: C.rate });
         break;
       case 'auth_fail':
@@ -126,6 +126,7 @@ function connect() {
       default:
         if (m.t && m.t.startsWith('cw_')) cwDesk.on(m);
         else if (m.t && (m.t.startsWith('rt_') || m.t.startsWith('fax_'))) digiDesk.on(m);
+        else if (m.t && m.t.startsWith('vk_')) voiceCq.on(m);
     }
   };
 }
@@ -1507,7 +1508,7 @@ const HOTKEYS = (() => {
       () => { opts.pttMode === 'toggle' ? (C.pttPressed ? pttUp() : pttDown()) : pttDown(); },
       () => { if (opts.pttMode === 'hold') pttUp(); }],
     ['stop', 'Передача', 'Стоп: снять передачу, остановить тюнер и передачу CW, отменить автоответ', ['Escape'],
-      () => { pttUp(); if (S.tuning) act('tune_stop'); cwDesk.stop(); digiDesk.stop(); }],
+      () => { pttUp(); if (S.tuning) act('tune_stop'); cwDesk.stop(); digiDesk.stop(); voiceCq.stop(); }],
     ['tuner', 'Передача', 'Тюнер: настроить', ['KeyT'], () => { act('tune'); note('Тюнер: настройка'); }],
     ['proc', 'Передача', 'Компрессор PROC', [], () => toggle('proc', 'PROC')],
     ['vox', 'Передача', 'VOX', [], () => toggle('vox', 'VOX')],
@@ -1719,3 +1720,117 @@ sizeCanvases();
   const t = store.get('tab', 'rx'); const b = $(`#tabs button[data-tab="${t}"]`); b && b.click();
 }
 connect();
+
+// ------------------------------------------------------------------ голосовой автовызов
+const voiceCq = (() => {
+  const st = { slots: [], run: null, rec: null, recSlot: 0, fileSlot: 0, audio: null };
+  const box = $('#vkSlots');
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  ['vkPause', 'vkRep', 'vkSig'].forEach(id => {
+    const v = store.get(id, null); if (v != null) $('#' + id).value = v;
+    $('#' + id).onchange = e => store.set(id, e.target.value);
+  });
+  function render() {
+    box.innerHTML = st.slots.map(s => {
+      const live = st.run && st.run.slot === s.slot, rec = st.recSlot === s.slot;
+      return `<div class="vk-slot${live ? ' live' : ''}${rec ? ' rec' : ''}" data-s="${s.slot}">
+        <b class="mono">${s.slot}</b>
+        <input class="nm" value="${esc(s.name)}" placeholder="${s.dur ? '' : 'пусто — запишите или загрузите'}" maxlength="40">
+        <span class="dur mono muted">${s.dur ? s.dur.toFixed(1) + ' с' : ''}</span>
+        <button class="btn small" data-a="rec">${rec ? '■ Стоп записи' : '● Запись'}</button>
+        <button class="btn small" data-a="file" title="Загрузить звуковой файл (wav, mp3, ogg…)">📁</button>
+        <button class="btn small" data-a="play" ${s.dur ? '' : 'disabled'} title="Прослушать у себя">▶</button>
+        <button class="btn small primary" data-a="go" ${s.dur ? '' : 'disabled'}>📢 В эфир</button>
+        <button class="btn small" data-a="del" ${s.dur ? '' : 'disabled'} title="Удалить">✕</button>
+      </div>`;
+    }).join('');
+    $$('.vk-slot', box).forEach(row => {
+      const slot = +row.dataset.s;
+      $$('button', row).forEach(b => b.onclick = () => action(b.dataset.a, slot, row));
+      $('.nm', row).onchange = e => { const s = st.slots.find(x => x.slot === slot); if (s && s.dur) rename(slot, e.target.value); };
+    });
+    const r = st.run;
+    $('#vkStatus').textContent = r ? `${r.name}: ${r.n}/${r.repeats} · ${r.phase === 'tx' ? 'передача' : 'слушаю, ещё ' + r.left + ' с'}` : '—';
+  }
+  const nameOf = (slot, row) => ($('.nm', row)?.value || '').trim() || 'CQ ' + slot;
+  async function action(a, slot, row) {
+    if (a === 'rec') return st.recSlot === slot ? stopRec() : startRec(slot, row);
+    if (a === 'file') { st.fileSlot = slot; st.fileName = nameOf(slot, row); $('#vkFile').value = ''; $('#vkFile').click(); return; }
+    if (a === 'play') return send({ t: 'vk_get', slot });
+    if (a === 'del') { if (confirm('Удалить сообщение ' + slot + '?')) send({ t: 'vk_delete', slot }); return; }
+    if (a === 'go') {
+      const sv = +$('#vkSig').value;
+      const raw = sv ? (S_CAL.find(p => p[1] >= sv) || [130])[0] : 0;
+      send({ t: 'vk_start', slot, pause: +$('#vkPause').value, repeats: +$('#vkRep').value, sig: raw });
+    }
+  }
+  // ---- запись с микрофона этого устройства
+  async function startRec(slot, row) {
+    if (st.rec) return;
+    if (!navigator.mediaDevices?.getUserMedia) return toast('Запись недоступна: откройте пульт по https:// или localhost');
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: opts.micId ? { exact: opts.micId } : undefined,
+        channelCount: 1, echoCancellation: opts.echo, noiseSuppression: opts.ns, autoGainControl: opts.agc } });
+    } catch (e) { return toast('Нет доступа к микрофону: ' + micErrorText(e), 8000); }
+    const chunks = [], mr = new MediaRecorder(stream);
+    mr.ondataavailable = e => e.data.size && chunks.push(e.data);
+    mr.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      st.rec = null; st.recSlot = 0; render();
+      await upload(slot, st.recName, await new Blob(chunks).arrayBuffer());
+    };
+    st.rec = mr; st.recSlot = slot; st.recName = nameOf(slot, row);
+    mr.start(); render(); toast('Говорите… «■ Стоп записи», когда закончите');
+    st.recTimer = setTimeout(() => st.rec && stopRec(), 120000);
+  }
+  function stopRec() { clearTimeout(st.recTimer); if (st.rec && st.rec.state !== 'inactive') st.rec.stop(); }
+  $('#vkFile').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 30e6) return toast('Файл слишком большой');
+    await upload(st.fileSlot, st.fileName || f.name.replace(/\.[^.]+$/, ''), await f.arrayBuffer());
+  };
+  // ---- перекодирование в 48 кГц моно, обрезка тишины, нормализация -> сервер
+  async function upload(slot, name, buf) {
+    let dec;
+    try { dec = await new AudioContext().decodeAudioData(buf); }
+    catch (e) { return toast('Не удалось прочитать звук: ' + e.message); }
+    const len = Math.ceil(dec.duration * 48000);
+    if (dec.duration > 120) return toast('Сообщение длиннее 2 минут');
+    const oc = new OfflineAudioContext(1, Math.max(len, 1), 48000);
+    const src = oc.createBufferSource(); src.buffer = dec;
+    const hp = new BiquadFilterNode(oc, { type: 'highpass', frequency: 120 });
+    const lp = new BiquadFilterNode(oc, { type: 'lowpass', frequency: 3000 });
+    src.connect(hp).connect(lp).connect(oc.destination); src.start();
+    let x = (await oc.startRendering()).getChannelData(0);
+    // обрезаем тишину по краям (порог −40 дБ от пика)
+    let peak = 0; for (const v of x) peak = Math.max(peak, Math.abs(v));
+    if (peak < 1e-3) return toast('В записи тишина — проверьте микрофон');
+    const thr = peak * 0.01; let a = 0, b = x.length - 1;
+    while (a < b && Math.abs(x[a]) < thr) a++;
+    while (b > a && Math.abs(x[b]) < thr) b--;
+    x = x.subarray(Math.max(0, a - 2400), Math.min(x.length, b + 4800));
+    const k = 0.8 / peak, pcm = new Int16Array(x.length);
+    for (let i = 0; i < x.length; i++) pcm[i] = Math.max(-1, Math.min(1, x[i] * k)) * 32767;
+    let bin = ''; const u8 = new Uint8Array(pcm.buffer);
+    for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    send({ t: 'vk_save', slot, name, pcm: btoa(bin) });
+  }
+  function rename(slot, name) { send({ t: 'vk_rename', slot, name }); }
+  function playLocal(m) {
+    const bin = atob(m.pcm), pcm = new Int16Array(bin.length / 2), dv = new DataView(new ArrayBuffer(bin.length));
+    for (let i = 0; i < bin.length; i++) dv.setUint8(i, bin.charCodeAt(i));
+    for (let i = 0; i < pcm.length; i++) pcm[i] = dv.getInt16(i * 2, true);
+    const ac = new AudioContext({ sampleRate: 48000 }), ab = ac.createBuffer(1, pcm.length, 48000), ch = ab.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+    const s = ac.createBufferSource(); s.buffer = ab; s.connect(ac.destination); s.start();
+    s.onended = () => ac.close();
+  }
+  $('#vkStop').onclick = () => send({ t: 'vk_stop' });
+  function on(m) {
+    if (m.t === 'vk_state') { st.slots = m.slots; st.run = m.run; render(); }
+    else if (m.t === 'vk_note') toast(m.msg, 5000);
+    else if (m.t === 'vk_audio') playLocal(m);
+  }
+  return { on, hello: () => send({ t: 'vk_hello' }), stop: () => { if (st.run) send({ t: 'vk_stop' }); stopRec(); }, running: () => !!st.run };
+})();

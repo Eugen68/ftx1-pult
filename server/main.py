@@ -42,6 +42,7 @@ from audio import SR, Decimator, Interpolator, Waterfall  # noqa: E402
 from webserver import WebServer  # noqa: E402
 from cwdesk import CwDesk  # noqa: E402
 from digidesk import DigiDesk  # noqa: E402
+from voicecq import VoiceCq  # noqa: E402
 
 VERSION = "1.8"
 APP_NAME = "FTX-1 Пульт"
@@ -307,6 +308,7 @@ class Station:
             self.menu = json.load(f)
         self.cw = CwDesk(self)
         self.digi = DigiDesk(self, BASE)
+        self.vk = VoiceCq(self, BASE)
         LOGBUF.listeners.append(self._on_log)
 
     def save_cfg(self):
@@ -380,6 +382,7 @@ class Station:
             return
         self.cw.stop()
         self.digi.stop()
+        self.vk.stop()
         if self.ptt_owner:
             self.set_ptt(None, False)
             await asyncio.sleep(0.15)
@@ -454,6 +457,9 @@ class Station:
                 client.ws.send_json({'t': 'note', 'msg': 'Сервер не подключён к трансиверу'})
             return
         if on:
+            if self.vk.task:                             # PTT вручную — автовызов прекращаем, работаем сами
+                self.vk.stop('нажата PTT')
+                self.vk.busy = False
             if self.digi.tx_busy or self.cw.sender.busy:
                 client.ws.send_json({'t': 'note', 'msg': 'Идёт передача RTTY/CW — дождитесь окончания'})
                 return
@@ -684,6 +690,9 @@ class Station:
             return
         if t.startswith('cw_'):
             await self.cw.on_msg(c, m)
+            return
+        if t.startswith('vk_'):
+            await self.vk.on_msg(c, m)
             return
         if t.startswith('rt_') or t.startswith('fax_'):
             await self.digi.on_msg(c, m)

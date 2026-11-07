@@ -356,3 +356,15 @@ body.fit .cw-screen { max-height: 30vh; }
 .fx-wrap.big { position: fixed; inset: 12px; z-index: 60; height: auto; box-shadow: 0 10px 40px #000c; }
 .fx-close { display: none; position: sticky; top: 6px; float: right; margin: 6px; z-index: 2; }
 .fx-wrap.big .fx-close { display: inline-flex; }
+
+/* ---------- голосовой автовызов */
+.vk { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.vk-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+.vk-slots { display: grid; gap: 6px; }
+.vk-slot { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.vk-slot .nm { flex: 1 1 140px; min-width: 120px; }
+.vk-slot .dur { width: 54px; text-align: right; }
+.vk-slot.rec .nm { border-color: #e5484d; }
+.vk-slot.live { outline: 2px solid var(--acc, #39c5e0); border-radius: 8px; }
+.vk-opts { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.btn:disabled { opacity: .35; pointer-events: none; }
