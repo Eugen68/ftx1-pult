@@ -110,6 +110,7 @@
     <div class="wf-wrap" id="wfWrap">
       <canvas id="spec"></canvas>
       <canvas id="wf"></canvas>
+      <canvas id="ftLab"></canvas>
       <canvas id="overlay"></canvas>
       <div class="wf-cursor" id="wfCursor"></div>
       <div class="wf-msg hidden" id="wfMsg"></div>
@@ -449,54 +450,71 @@
         <label class="mini">Диапазон<select id="ftBand"></select></label>
         <span class="ft-clock mono" id="ftClock">--:--:--</span>
         <div class="ft-slot"><div id="ftSlotBar"></div></div>
-        <span class="muted small mono" id="ftDt" title="Среднее смещение времени принятых станций. Больше ±0,5 с — подведите часы ПК (time.is / синхронизация Windows)">dt —</span>
+        <span class="muted small mono" id="ftDt" title="Среднее смещение времени принятых станций. Больше ±0,5 с — подведите часы ПК">dt —</span>
+        <span class="spacer"></span>
+        <span class="muted small" id="ftWfHint">Водопад: клик — RX, правый клик/Shift — TX, двойной — оба</span>
       </div>
-      <div class="ft-grid">
-        <div class="ft-col">
-          <div class="ft-head"><b>Эфир</b>
+      <div class="ft-panes">
+        <div class="ft-pane">
+          <div class="ft-head"><b>Активность диапазона</b>
             <label class="chk mini"><input type="checkbox" id="ftOnlyCq"> только CQ и мне</label>
             <span class="spacer"></span><button class="btn small" id="ftClear">Очистить</button></div>
-          <div class="ft-list mono" id="ftList"><div class="muted ft-hint" id="ftHint">Включите приём и выберите диапазон — трансивер встанет в DATA-U на частоту FT8.
-            Расшифровка — в конце каждого 15-секундного периода. Нажмите на строку — позвать станцию (связь проведётся сама).</div></div>
+          <div class="ft-th mono"><span>UTC</span><span>дБ</span><span>DT</span><span>Част</span><span>Сообщение</span></div>
+          <div class="ft-list mono" id="ftList"><div class="muted ft-hint" id="ftHint">Включите приём и выберите диапазон — трансивер встанет в DATA-U на частоту FT8, полоса 3000 Гц.
+            Расшифровка — в конце каждого периода. Нажмите на строку — позвать станцию (связь проведётся сама).</div></div>
         </div>
-        <div class="ft-col ft-side">
-          <div class="ft-tx">
-            <div class="ft-txmsg mono" id="ftTxMsg">—</div>
-            <div class="ft-qso small" id="ftQso">Связи нет</div>
-            <div class="btn-row">
-              <button class="btn primary" id="ftCq">CQ</button>
-              <button class="btn" id="ftEnable" title="Разрешить передачу (Enable TX)">Передача: выкл</button>
-              <button class="btn danger" id="ftHalt" title="Немедленно прекратить передачу и сбросить связь">■ Стоп</button>
-            </div>
-            <div class="btn-row">
-              <label class="chk mini" title="После каждой связи снова звать CQ"><input type="checkbox" id="ftAutoCq"> авто-CQ</label>
-              <label class="mini" title="В каком периоде передаём: 1-й (00/30 с) или 2-й (15/45 с)">Период<select id="ftPar"><option value="0">1-й / чётный</option><option value="1">2-й / нечётный</option></select></label>
-              <label class="mini" title="Частота передачи в звуке. Правый клик по водопаду — поставить">TX, Гц<input type="number" id="ftTxHz" class="num" min="200" max="3000" step="10" value="1500"></label>
-            </div>
-            <div class="cw-txrow">
-              <input id="ftText" class="text grow mono" maxlength="37" placeholder="Своё сообщение (например UA3ABC R6AAF 73)">
-              <button class="btn small" id="ftTextSend">Передать</button>
-            </div>
-          </div>
+        <div class="ft-pane">
+          <div class="ft-head"><b>Частота RX</b> <span class="mono ft-rxlbl" id="ftRxLbl">1500 Гц</span>
+            <span class="spacer"></span><button class="btn small" id="ftClear2">Очистить</button></div>
+          <div class="ft-th mono"><span>UTC</span><span>дБ</span><span>DT</span><span>Част</span><span>Сообщение</span></div>
+          <div class="ft-list mono" id="ftRxList"></div>
+        </div>
+      </div>
+      <div class="ft-ctl">
+        <div class="ft-box ft-btns">
+          <button class="btn" id="ftEnable" title="Разрешить передачу (Enable TX)">Включить TX</button>
+          <button class="btn danger" id="ftHalt" title="Прекратить передачу и сбросить связь (Halt TX)">Стоп TX</button>
+          <button class="btn" id="ftTune" title="Несущая на частоте TX до 30 с — для тюнера и уровня ALC">Настройка</button>
+          <button class="btn primary" id="ftCq">CQ</button>
+          <label class="chk mini" title="Автоматическое проведение связи (Auto Seq)"><input type="checkbox" id="ftAutoSeq" checked> Авто-послед.</label>
+          <label class="chk mini" title="После каждой связи снова звать CQ"><input type="checkbox" id="ftAutoCq"> Авто-CQ</label>
+          <label class="mini" title="В каком периоде передаём: 1-й (00/30 с) или 2-й (15/45 с)">Период<select id="ftPar"><option value="0">1-й (чётн.)</option><option value="1">2-й (нечётн.)</option></select></label>
+        </div>
+        <div class="ft-box ft-freqs">
+          <label class="mini">RX, Гц<input type="number" id="ftRxHz" class="num" min="200" max="3000" step="10" value="1500"></label>
+          <label class="mini">TX, Гц<input type="number" id="ftTxHz" class="num" min="200" max="3000" step="10" value="1500"></label>
+          <div class="btn-row"><button class="btn small" id="ftTx2Rx" title="Частоту RX поставить равной TX">RX ← TX</button>
+            <button class="btn small" id="ftRx2Tx" title="Частоту TX поставить равной RX">TX ← RX</button></div>
+          <label class="mini">DX позывной<input id="ftDxCall" class="text mono" maxlength="11"></label>
+          <label class="mini">DX локатор<input id="ftDxGrid" class="text mono" maxlength="4"></label>
+          <label class="mini">Рапорт<input id="ftRpt" class="num mono" type="number" min="-30" max="30" value="-10"></label>
+          <button class="btn small" id="ftGen" title="Сформировать стандартные сообщения">Сформировать</button>
+        </div>
+        <div class="ft-box ft-msgs" id="ftMsgs"></div>
+      </div>
+      <div class="ft-status"><span class="ft-txmsg mono" id="ftTxMsg">—</span> <span class="ft-qso small" id="ftQso">Связи нет</span></div>
+      <div class="ft-bottom">
+        <div>
           <h4>Связи <span class="muted small" id="ftLogInfo"></span></h4>
           <div class="ft-log mono small" id="ftLog"><span class="muted">Пока нет</span></div>
-          <details class="ft-cfg">
-            <summary>Настройки FT8 и лог</summary>
-            <div class="ft-cfg-grid">
-              <label class="mini">Позывной<input id="ftCall" class="text mono" maxlength="11" placeholder="R6AAF"></label>
-              <label class="mini">Локатор<input id="ftGrid" class="text mono" maxlength="6" placeholder="KN94"></label>
-              <label class="mini">Мощность, Вт<input id="ftPwr" class="text mono" maxlength="5" placeholder="10"></label>
-              <label class="mini" title="Сколько раз повторять без ответа">Повторов<input id="ftTries" type="number" class="num" min="2" max="20" value="6"></label>
-              <label class="mini" title="Уровень сигнала передачи (ALC должен почти не двигаться)">Уровень TX<input id="ftLevel" type="range" min="0.05" max="1" step="0.05" value="0.5"></label>
-              <label class="chk mini"><input type="checkbox" id="ftUdpOn" checked> отправлять в лог (UDP, как WSJT-X)</label>
-              <label class="mini">Адрес<input id="ftUdpHost" class="text mono" value="127.0.0.1"></label>
-              <label class="mini">Порт<input id="ftUdpPort" type="number" class="num" value="2237"></label>
-            </div>
-            <p class="muted small">Каждая связь пишется в файл <span class="mono">ft8_log.adi</span> рядом с программой и отправляется по UDP в формате WSJT-X —
-              его принимают HAMLOG-агент, Log4OM, JTAlert, GridTracker. В программе лога включите приём от WSJT-X на этом же порту (обычно 2237).
-              Часы ПК должны быть точными (±0,5 с).</p>
-          </details>
         </div>
+        <details class="ft-cfg">
+          <summary>Настройки FT8 и лог</summary>
+          <div class="ft-cfg-grid">
+            <label class="mini">Позывной<input id="ftCall" class="text mono" maxlength="11" placeholder="R6AAF"></label>
+            <label class="mini">Локатор<input id="ftGrid" class="text mono" maxlength="6" placeholder="KN94"></label>
+            <label class="mini">Мощность, Вт<input id="ftPwr" class="text mono" maxlength="5" placeholder="10"></label>
+            <label class="mini" title="Сколько раз повторять без ответа">Повторов<input id="ftTries" type="number" class="num" min="2" max="20" value="6"></label>
+            <label class="mini" title="Уровень сигнала передачи (ALC должен почти не двигаться)">Уровень TX<input id="ftLevel" type="range" min="0.05" max="1" step="0.05" value="0.5"></label>
+            <label class="chk mini"><input type="checkbox" id="ftWide" checked> расширять полосу DATA-U до 3000 Гц</label>
+            <label class="chk mini"><input type="checkbox" id="ftWfLab" checked> позывные и время на водопаде</label>
+            <label class="chk mini"><input type="checkbox" id="ftUdpOn" checked> отправлять в лог (UDP, как WSJT-X)</label>
+            <label class="mini">Адрес<input id="ftUdpHost" class="text mono" value="127.0.0.1"></label>
+            <label class="mini">Порт<input id="ftUdpPort" type="number" class="num" value="2237"></label>
+          </div>
+          <p class="muted small">Каждая связь пишется в файл <span class="mono">ft8_log.adi</span> рядом с программой и отправляется по UDP в формате WSJT-X —
+            его принимают HAMLOG-агент, Log4OM, JTAlert, GridTracker. Часы ПК должны быть точными (±0,5 с).</p>
+        </details>
       </div>
     </div>
 

@@ -46,7 +46,7 @@ from voicecq import VoiceCq  # noqa: E402
 from recorder import QsoRecorder  # noqa: E402
 from ft8 import Ft8Desk  # noqa: E402
 
-VERSION = "2.0"
+VERSION = "2.1"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'

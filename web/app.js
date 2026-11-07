@@ -534,6 +534,17 @@ function sizeCanvases() {
 // была привычной (сигнал по центру), показываем звук зеркально: 0 Гц в середине, ±частоты по краям.
 const mirrored = () => opts.fmCenter !== false && isAMFM(S.mode);
 function wfRow(row, binHz) {
+  // FT8: водопад медленнее — видно 3–4 периода (как в JTDX/MSHV); соседние строки объединяются по максимуму
+  const tNow = performance.now();
+  if (C.wfT) C.wfRate = (C.wfRate || 30) * 0.95 + 0.05 * (1000 / Math.max(1, tNow - C.wfT));
+  C.wfT = tNow;
+  if (C.tab === 'ft8' && !mirrored()) {
+    const N = Math.max(1, Math.round((C.wfRate || 30) * 50 / Math.max(50, wf.rows || 300)));
+    if (!C.ftAcc || C.ftAcc.length !== row.length) { C.ftAcc = Uint8Array.from(row); C.ftAccN = 0; }
+    else for (let i = 0; i < row.length; i++) if (row[i] > C.ftAcc[i]) C.ftAcc[i] = row[i];
+    if (++C.ftAccN < N) return;
+    row = C.ftAcc; C.ftAcc = null;
+  }
   if (mirrored()) {
     const n0 = row.length, r2 = new Uint8Array(n0 * 2 - 1);
     for (let i = 0; i < n0; i++) { r2[n0 - 1 - i] = row[i]; r2[n0 - 1 + i] = row[i]; }
@@ -554,6 +565,7 @@ function wfRow(row, binHz) {
   const px = new Uint32Array(wf.img.data.buffer);
   for (let i = 0; i < n; i++) px[i] = wf.lut[row[i]];
   ctx.putImageData(wf.img, 0, 0);
+  window.ft8Desk && ft8Desk.onRow();
   // спектр — со сглаживанием
   if (!wf.avg || wf.avg.length !== n) wf.avg = Float32Array.from(row);
   for (let i = 0; i < n; i++) wf.avg[i] = wf.avg[i] * 0.6 + row[i] * 0.4;
@@ -601,7 +613,13 @@ function drawOverlay() {
     ctx.strokeStyle = '#3ddc84'; ctx.setLineDash([2 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath(); ctx.moveTo(X(C.cwMark), 0); ctx.lineTo(X(C.cwMark), H); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = dpr;
   }
-  for (const [hz, col] of (C.dgMarks || []).concat(C.dgMarks2 || [], C.ftMarks || [])) {    // RTTY mark/space, факс чёрный/белый
+  for (const [hz, col, bw] of C.ftMarks || []) {    // FT8: RX (зелёная) и TX (красная) — скобки шириной сигнала, как в JTDX
+    const x0 = X(hz), x1 = X(hz + bw), yT = H * 0.28;
+    ctx.fillStyle = col; ctx.globalAlpha = 0.18; ctx.fillRect(x0, yT, x1 - x0, H - yT); ctx.globalAlpha = 1;
+    ctx.fillRect(x0, yT - 5 * dpr, x1 - x0, 3 * dpr);
+    ctx.fillRect(x0, yT - 5 * dpr, 1.5 * dpr, 10 * dpr); ctx.fillRect(x1 - 1.5 * dpr, yT - 5 * dpr, 1.5 * dpr, 10 * dpr);
+  }
+  for (const [hz, col] of (C.dgMarks || []).concat(C.dgMarks2 || [])) {    // RTTY mark/space, факс чёрный/белый
     ctx.strokeStyle = col; ctx.setLineDash([3 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath(); ctx.moveTo(X(hz), 0); ctx.lineTo(X(hz), H); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = dpr;
   }
@@ -647,18 +665,19 @@ function tuneToAudio(a) {
     cur.dataset.f = `${Math.round(a)} Гц · ${fmtFreq(audioToRf(a))}`;
   });
   w.addEventListener('pointerleave', () => { cur.style.display = 'none'; });
-  w.addEventListener('dblclick', e => tuneToAudio(aAt(e)));
+  w.addEventListener('dblclick', e => { if (C.tab === 'ft8') ft8Desk.pickWf(aAt(e), 'both'); else tuneToAudio(aAt(e)); });
+  w.addEventListener('click', e => { if (C.tab === 'ft8') ft8Desk.pickWf(aAt(e), e.shiftKey ? 'tx' : 'rx'); });
   w.addEventListener('contextmenu', e => {            // правый клик — декодер CW слушает эту частоту
     e.preventDefault();
     if (C.tab === 'digi') digiDesk.setFreq(Math.round(aAt(e)));
-    else if (C.tab === 'ft8') ft8Desk.setTx(aAt(e));
+    else if (C.tab === 'ft8') ft8Desk.pickWf(aAt(e), 'tx');
     else cwDesk.setFreq(Math.round(aAt(e)));
   });
   let lastTap = 0;
   w.addEventListener('pointerup', e => {           // двойной тап на телефоне
     if (e.pointerType !== 'touch') return;
     const now = performance.now();
-    if (now - lastTap < 350) tuneToAudio(aAt(e));
+    if (now - lastTap < 350) { if (C.tab === 'ft8') ft8Desk.pickWf(aAt(e), 'both'); else tuneToAudio(aAt(e)); }
     lastTap = now;
   });
   w.addEventListener('wheel', e => { e.preventDefault(); nudge(e.deltaY < 0 ? 1 : -1); }, { passive: false });
@@ -2112,44 +2131,60 @@ const digi2 = (() => {
 })();
 window.digi2 = digi2;
 
-// ======================================================================= FT8 / FT4
+// ======================================================================= FT8 / FT4 (в духе JTDX / MSHV)
 const ft8Desk = (() => {
-  const st = { on: store.get('ftOn', false), mode: 'FT8', txHz: 1500, txEnable: false, busy: false, tx: false, par: 0,
-    bands: [], clockOff: 0, rows: 0, lastSlot: '', qso: null };
+  const st = { on: store.get('ftOn', false), mode: 'FT8', txHz: 1500, rxHz: store.get('ftRx', 1500), txEnable: false, tx: false,
+    par: 0, clockOff: 0, rows: 0, rxRows: 0, qsoKey: '', txMsg: '', myCall: '', myGrid: '',
+    rowCount: 0, slotRow: {}, lastK: null, labSpan: 0, labOn: store.get('ftWfLab', true) };
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const list = $('#ftList');
+  const list = $('#ftList'), rxList = $('#ftRxList'), lab = $('#ftLab');
   const SLOT = () => st.mode === 'FT4' ? 7.5 : 15;
+  const BW = () => st.mode === 'FT4' ? 83 : 50;
+  const now = () => Date.now() / 1000 + st.clockOff;
+  const fmtUtc = slot => slot.slice(0, 2) + slot.slice(2, 4) + slot.slice(4, 6);
+  const rpt = v => { v = clamp(Math.round(+v || 0), -30, 49); return (v < 0 ? '-' : '+') + String(Math.abs(v)).padStart(2, '0'); };
+  const active = () => C.tab === 'ft8';
 
+  // ---------------------------------------------------------------- кнопки
   function renderOn() {
     $('#ftOnBtn').classList.toggle('on', st.on);
     $('#ftOnBtn').textContent = st.on ? '● Приём вкл' : '○ Приём выкл';
   }
+  const turnOn = () => { if (!st.on) { st.on = true; store.set('ftOn', true); renderOn(); send({ t: 'ft_hello', on: true }); } };
   $('#ftOnBtn').onclick = () => { st.on = !st.on; store.set('ftOn', st.on); renderOn(); send({ t: 'ft_hello', on: st.on }); };
-  $$('#ftModeSw button').forEach(b => b.onclick = () => { send({ t: 'ft_mode', mode: b.dataset.v }); });
+  $$('#ftModeSw button').forEach(b => b.onclick = () => send({ t: 'ft_mode', mode: b.dataset.v }));
   $('#ftBand').onchange = e => {
     const kHz = +e.target.value; if (!kHz) return;
-    setParam('mode', 'DATA-U'); setFreq(Math.round(kHz * 1000));
-    if (!st.on) { st.on = true; store.set('ftOn', true); renderOn(); send({ t: 'ft_hello', on: true }); }
+    if (S.mode !== 'DATA-U') setParam('mode', 'DATA-U');
+    setFreq(Math.round(kHz * 1000)); turnOn();
     toast(`${st.mode}: DATA-U ${kHz} кГц`); e.target.value = '';
   };
-  $('#ftCq').onclick = () => { if (!st.on) $('#ftOnBtn').click(); send({ t: 'ft_cq' }); };
+  $('#ftCq').onclick = () => { turnOn(); send({ t: 'ft_cq' }); };
   $('#ftEnable').onclick = () => send({ t: 'ft_enable', on: !st.txEnable });
   $('#ftHalt').onclick = () => send({ t: 'ft_halt' });
+  $('#ftTune').onclick = () => send({ t: 'ft_tune', on: !st.tune });
+  $('#ftAutoSeq').onchange = e => send({ t: 'ft_auto_seq', on: e.target.checked });
   $('#ftAutoCq').onchange = e => send({ t: 'ft_auto_cq', on: e.target.checked });
   $('#ftPar').onchange = e => send({ t: 'ft_par', par: +e.target.value });
   $('#ftTxHz').onchange = e => setTx(+e.target.value);
+  $('#ftRxHz').onchange = e => setRx(+e.target.value);
+  $('#ftTx2Rx').onclick = () => setRx(st.txHz);
+  $('#ftRx2Tx').onclick = () => setTx(st.rxHz);
   $('#ftClear').onclick = () => { list.innerHTML = ''; st.rows = 0; };
-  $('#ftOnlyCq').onchange = e => { store.set('ftOnlyCq', e.target.checked); list.classList.toggle('only', e.target.checked); applyFilter(); };
+  
+  $('#ftClear2').onclick = () => { rxList.innerHTML = ''; st.rxRows = 0; };
   $('#ftOnlyCq').checked = store.get('ftOnlyCq', false);
-  const sendText = () => { const t = $('#ftText').value.trim(); if (t) send({ t: 'ft_text', text: t }); };
-  $('#ftTextSend').onclick = sendText;
-  $('#ftText').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendText(); } });
+  $('#ftOnlyCq').onchange = e => { store.set('ftOnlyCq', e.target.checked); applyFilter(); };
+  $('#ftWfLab').checked = st.labOn;
+  $('#ftWfLab').onchange = e => { st.labOn = e.target.checked; store.set('ftWfLab', st.labOn); marks(); };
   const CFG = { ftCall: 'my_call', ftGrid: 'my_grid', ftPwr: 'ft_pwr', ftTries: 'ft_tries', ftLevel: 'ft_tx_level',
-    ftUdpOn: 'ft_udp_on', ftUdpHost: 'ft_udp_host', ftUdpPort: 'ft_udp_port' };
+    ftUdpOn: 'ft_udp_on', ftUdpHost: 'ft_udp_host', ftUdpPort: 'ft_udp_port', ftWide: 'ft_wide' };
   for (const [id, k] of Object.entries(CFG)) {
     $('#' + id).addEventListener('change', e => {
-      const el = e.target, v = el.type === 'checkbox' ? el.checked : (el.type === 'number' || el.type === 'range') ? +el.value : el.value.trim().toUpperCase();
-      send({ t: 'ft_cfg', [k]: el.id === 'ftUdpHost' ? el.value.trim() : v });
+      const el = e.target;
+      const v = el.type === 'checkbox' ? el.checked : (el.type === 'number' || el.type === 'range') ? +el.value
+        : id === 'ftUdpHost' ? el.value.trim() : el.value.trim().toUpperCase();
+      send({ t: 'ft_cfg', [k]: v });
     });
   }
 
@@ -2157,84 +2192,211 @@ const ft8Desk = (() => {
     hz = clamp(Math.round(hz), 200, 3000); st.txHz = hz; $('#ftTxHz').value = hz;
     send({ t: 'ft_freq', tx: hz }); marks();
   }
+  function setRx(hz) {
+    hz = clamp(Math.round(hz), 200, 3000); st.rxHz = hz; $('#ftRxHz').value = hz; store.set('ftRx', hz);
+    $('#ftRxLbl').textContent = hz + ' Гц';
+    send({ t: 'ft_freq', rx: hz }); marks();
+  }
+  function pickWf(hz, how) {          // водопад: клик — RX, правый/Shift — TX, двойной — оба
+    if (how !== 'tx') setRx(hz);
+    if (how !== 'rx') setTx(hz);
+  }
   function marks() {
-    C.ftMarks = C.tab === 'ft8' ? [[st.txHz, '#ff5a4d'], [st.txHz + (st.mode === 'FT4' ? 83 : 50), '#ff5a4d']] : [];
-    drawOverlay();
+    C.ftMarks = active() ? [[st.rxHz, '#3ddc84', BW()], [st.txHz, '#ff5a4d', BW()]] : [];
+    lab.style.display = active() && st.labOn ? '' : 'none';
+    drawOverlay(); drawLab();
   }
 
-  // ---- часы и полоска слота
+  // ---------------------------------------------------------------- стандартные сообщения Tx1…Tx6
+  const MSG_N = 6;
+  $('#ftMsgs').innerHTML = Array.from({ length: MSG_N }, (_, i) =>
+    `<div class="ft-msg" data-i="${i}"><button class="btn small" title="Передавать это сообщение">Tx${i + 1}</button><input class="text" maxlength="37"></div>`).join('') +
+    `<div class="ft-msg"><button class="btn small" id="ftFreeBtn" title="Передать свой текст">Свой</button><input class="text" id="ftText" maxlength="37" placeholder="свободный текст, Enter — передать"></div>`;
+  const msgInputs = $$('#ftMsgs .ft-msg[data-i] input');
+  function genMsgs(push = true) {
+    const call = $('#ftDxCall').value.trim().toUpperCase(), grid = $('#ftDxGrid').value.trim().toUpperCase();
+    const my = st.myCall || 'MYCALL', g = st.myGrid || '', r = rpt($('#ftRpt').value);
+    const m = call ? [`${call} ${my} ${g}`.trim(), `${call} ${my} ${r}`, `${call} ${my} R${r}`, `${call} ${my} RR73`, `${call} ${my} 73`]
+      : ['', '', '', '', ''];
+    m.push(`CQ ${my} ${g}`.trim());
+    msgInputs.forEach((el, i) => { el.value = m[i]; });
+    if (push && call) send({ t: 'ft_dx', call, grid, rst: r });
+    renderCur();
+  }
+  $('#ftGen').onclick = () => { if (!$('#ftDxCall').value.trim()) send({ t: 'ft_dx', call: '' }); genMsgs(); };
+  ['#ftDxCall', '#ftDxGrid', '#ftRpt'].forEach(id => $(id).addEventListener('change', () => genMsgs()));
+  $$('#ftMsgs .ft-msg[data-i] .btn').forEach(b => b.onclick = () => {
+    const i = +b.parentElement.dataset.i, text = msgInputs[i].value.trim();
+    if (!text) return toast('Сначала укажите DX позывной и нажмите «Сформировать»');
+    turnOn();
+    if (i === 5) { send({ t: 'ft_cq' }); return; }
+    const call = $('#ftDxCall').value.trim().toUpperCase();
+    if (call) send({ t: 'ft_dx', call, grid: $('#ftDxGrid').value.trim().toUpperCase(), rst: rpt($('#ftRpt').value) });
+    send({ t: 'ft_text', text });
+  });
+  const sendText = () => { const t = $('#ftText').value.trim(); if (t) { turnOn(); send({ t: 'ft_text', text: t }); } };
+  $('#ftFreeBtn').onclick = sendText;
+  $('#ftText').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendText(); } });
+  function renderCur() {
+    $$('#ftMsgs .ft-msg').forEach(r => { const inp = $('input', r); r.classList.toggle('cur', !!st.txMsg && inp.value.trim() === st.txMsg); });
+  }
+
+  // ---------------------------------------------------------------- часы и полоска периода
   setInterval(() => {
-    const now = Date.now() / 1000 + st.clockOff;
-    const d = new Date(now * 1000);
-    $('#ftClock').textContent = d.toISOString().slice(11, 19) + ' UTC';
-    const s = SLOT(), k = Math.floor(now / s), frac = (now - k * s) / s;
-    $('#ftSlotBar').style.width = (frac * 100).toFixed(1) + '%';
+    const t = now();
+    $('#ftClock').textContent = new Date(t * 1000).toISOString().slice(11, 19) + ' UTC';
+    const s = SLOT(), k = Math.floor(t / s);
+    $('#ftSlotBar').style.width = ((t - k * s) / s * 100).toFixed(1) + '%';
     $('#ftSlotBar').parentElement.classList.toggle('tx', st.tx);
   }, 200);
 
-  // ---- список расшифровок
+  // ---------------------------------------------------------------- водопад: время периодов и позывные
+  // Метки хранятся с номером строки водопада и перерисовываются целиком на каждой новой строке.
+  const labs = [];                         // {row, hz|null, text, col}
+  function clearLab() { labs.length = 0; st.slotRow = {}; drawLab(); }
+  function drawLab() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (!lab.clientWidth) return;
+    const W = Math.round(lab.clientWidth * dpr), H = Math.round(lab.clientHeight * dpr);
+    if (lab.width !== W || lab.height !== H) { lab.width = W; lab.height = H; }
+    const ctx = lab.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    if (!active() || !st.labOn || mirrored()) return;
+    const sh = H / (wf.rows || lab.clientHeight);
+    ctx.font = `${11 * dpr}px Consolas, monospace`;
+    while (labs.length && (st.rowCount - labs[0].row) * sh > H + 20 * dpr) labs.shift();
+    for (const l of labs) {
+      const y = (st.rowCount - l.row) * sh;
+      if (l.hz == null) {                  // начало периода: линия и время
+        ctx.fillStyle = 'rgba(255,255,255,.4)'; ctx.fillRect(0, y, W, Math.max(1, dpr));
+        ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillText(l.text, 4 * dpr, y + 12 * dpr);
+      } else {
+        const x = l.hz / C.span * W + 2 * dpr, yy = y - l.dy * dpr;
+        if (yy < 10 * dpr) continue;
+        ctx.font = `bold ${11 * dpr}px Consolas, monospace`;
+        ctx.lineWidth = 3 * dpr; ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.strokeText(l.text, x, yy);
+        ctx.fillStyle = l.col; ctx.fillText(l.text, x, yy);
+        ctx.font = `${11 * dpr}px Consolas, monospace`;
+      }
+    }
+  }
+  function onRow() {                       // вызывается на каждую новую строку водопада
+    st.rowCount++;
+    const s = SLOT(), k = Math.floor(now() / s);
+    if (k !== st.lastK) {
+      st.lastK = k; st.slotRow[k] = st.rowCount;
+      labs.push({ row: st.rowCount, hz: null, text: new Date(k * s * 1000).toISOString().slice(11, 19) });
+      for (const kk in st.slotRow) if (kk < k - 40) delete st.slotRow[kk];
+    }
+    if (active() && st.labOn) drawLab();
+  }
+  function labelDecodes(m) {
+    if (m.t0 == null) return;
+    const r0 = st.slotRow[Math.round(m.t0 / SLOT())];
+    if (r0 == null) return;
+    const used = [];
+    for (const it of m.items) {
+      if (!it.call) continue;
+      let dy = 4;                          // подпись чуть выше линии начала периода, без наложений
+      while (used.some(u => Math.abs(u[0] - it.f) < 160 && u[1] === dy)) dy += 12;
+      used.push([it.f, dy]);
+      const col = it.tags.includes('me') ? '#ff6b6b' : it.tags.includes('cq') ? '#7dffa8' : '#ffffff';
+      labs.push({ row: r0, hz: it.f, text: it.call, col, dy });
+    }
+    labs.sort((a, b) => a.row - b.row);
+    drawLab();
+  }
+
+  // ---------------------------------------------------------------- списки расшифровок
+  const nearRx = it => Math.abs(it.f - st.rxHz) <= BW() + 10;
   function applyFilter() {
     const only = $('#ftOnlyCq').checked;
-    $$('#ftList .ft-row').forEach(r => r.classList.toggle('hidden', only && !r.classList.contains('cq') && !r.classList.contains('me') && !r.classList.contains('mine')));
+    $$('#ftList .ft-row').forEach(r => r.classList.toggle('hidden', only && !r.classList.contains('cq') && !r.classList.contains('me')));
   }
+  function row(it, utc, extra = '') {
+    const r = document.createElement('div');
+    r.className = 'ft-row ' + it.tags.join(' ') + extra;
+    r.innerHTML = `<span>${utc}</span><span class="n">${it.snr}</span><span class="n">${it.dt.toFixed(1)}</span><span class="n">${it.f}</span><span class="tx">${esc(it.text)}</span>`;
+    r.title = it.call ? 'Нажмите — позвать ' + it.call : '';
+    r.onclick = () => {
+      if (!st.myCall) { toast('Укажите свой позывной в настройках FT8'); $('.ft-cfg').open = true; return; }
+      turnOn(); setRx(it.f); send({ t: 'ft_call', item: it });
+    };
+    return r;
+  }
+  function trim(el, key) {
+    while (st[key] > 500 && el.firstChild) { if (el.firstChild.classList.contains('ft-row')) st[key]--; el.firstChild.remove(); }
+  }
+  function sep(text) { const d = document.createElement('div'); d.className = 'ft-sep'; d.textContent = text; return d; }
+  const seen = new Set();
   function addSlot(m) {
+    const key = m.mode + m.slot;
+    if (seen.has(key)) return;                // повтор при переподключении
+    seen.add(key);
     $('#ftHint')?.remove();
+    const utc = fmtUtc(m.slot), hh = `${m.slot.slice(0, 2)}:${m.slot.slice(2, 4)}:${m.slot.slice(4, 6)}`;
     const end = list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
-    const sep = document.createElement('div');
-    sep.className = 'ft-sep';
-    const hh = m.slot.slice(0, 2) + ':' + m.slot.slice(2, 4) + ':' + m.slot.slice(4, 6);
-    sep.textContent = `${hh}  ${m.mode}  · ${m.items.length ? m.items.length + ' расшифр.' : 'тишина'}${m.old ? ' (ранее)' : ''}`;
-    list.append(sep);
-    for (const it of m.items) {
-      const r = document.createElement('div');
-      r.className = 'ft-row ' + it.tags.join(' ');
-      r.innerHTML = `<span class="n">${it.snr}</span><span class="n">${it.dt.toFixed(1)}</span><span class="n">${it.f}</span><span class="tx">${esc(it.text)}</span>`;
-      r.title = 'Нажмите — позвать ' + (it.call || '');
-      r.onclick = () => {
-        if (!st.on) return;
-        if (!$('#ftCall').value) { toast('Укажите свой позывной в настройках FT8'); $('.ft-cfg').open = true; return; }
-        send({ t: 'ft_call', item: it });
-      };
-      list.append(r); st.rows++;
-    }
-    while (st.rows > 600 && list.firstChild) { if (list.firstChild.classList.contains('ft-row')) st.rows--; list.firstChild.remove(); }
-    applyFilter();
+    list.append(sep(`────── ${hh} ${m.mode} ${m.items.length ? '' : '· тишина '}──────`));
+    for (const it of m.items) { list.append(row(it, utc)); st.rows++; }
+    trim(list, 'rows'); applyFilter();
     if (end) list.scrollTop = list.scrollHeight;
+    const mine = m.items.filter(it => nearRx(it) || it.tags.includes('me'));
+    if (mine.length) {
+      const end2 = rxList.scrollTop + rxList.clientHeight >= rxList.scrollHeight - 40;
+      for (const it of mine) { rxList.append(row(it, utc)); st.rxRows++; }
+      trim(rxList, 'rxRows');
+      if (end2) rxList.scrollTop = rxList.scrollHeight;
+    }
   }
-  function addMine(text) {
+  function addMine(text, slot) {
     const r = document.createElement('div');
     r.className = 'ft-row mine';
-    r.innerHTML = `<span class="n">TX</span><span class="n"></span><span class="n">${st.txHz}</span><span class="tx">${esc(text)}</span>`;
-    list.append(r); st.rows++;
-    list.scrollTop = list.scrollHeight;
+    r.innerHTML = `<span>${slot ? fmtUtc(slot) : ''}</span><span class="n">TX</span><span class="n"></span><span class="n">${st.txHz}</span><span class="tx">${esc(text)}</span>`;
+    rxList.append(r); st.rxRows++;
+    rxList.scrollTop = rxList.scrollHeight;
   }
-  function addLog(q, top) {
+  function addLog(q) {
     const L = $('#ftLog'); L.querySelector('.muted')?.remove();
     const d = document.createElement('div');
     d.textContent = `${q.time}  ${q.call.padEnd(10)} ${(q.grid || '').padEnd(4)}  ${q.sent}/${q.rcvd}  ${q.band} ${q.mode}`;
-    top ? L.prepend(d) : L.prepend(d);
+    L.prepend(d);
+    $('#ftLogInfo').textContent = '· ' + L.children.length;
   }
 
+  // ---------------------------------------------------------------- состояние сервера
   function render(m) {
-    st.mode = m.mode; st.txEnable = m.tx_enable; st.busy = m.busy; st.par = m.tx_par; st.bands = m.bands;
+    st.mode = m.mode; st.txEnable = m.tx_enable; st.par = m.tx_par; st.tune = m.tune; st.txMsg = m.tx_msg || '';
+    st.myCall = m.my_call || ''; st.myGrid = m.my_grid || '';
     if (document.activeElement !== $('#ftTxHz')) { st.txHz = m.tx_hz; $('#ftTxHz').value = m.tx_hz; }
     if (m.now) st.clockOff = m.now - Date.now() / 1000;
     $$('#ftModeSw button').forEach(b => b.classList.toggle('on', b.dataset.v === m.mode));
-    $('#ftBand').innerHTML = '<option value="">— выбрать —</option>' + m.bands.map(b => `<option value="${b[1]}">${b[0]} — ${b[1]} кГц</option>`).join('');
-    $('#ftEnable').textContent = 'Передача: ' + (m.tx_enable ? 'вкл' : 'выкл');
+    const bandsHtml = '<option value="">— выбрать —</option>' + m.bands.map(b => `<option value="${b[1]}">${b[0]} — ${b[1]} кГц</option>`).join('');
+    if ($('#ftBand').dataset.mode !== m.mode) { $('#ftBand').innerHTML = bandsHtml; $('#ftBand').dataset.mode = m.mode; }
+    $('#ftEnable').textContent = m.tx_enable ? 'TX включён' : 'Включить TX';
     $('#ftEnable').classList.toggle('tx-on', m.tx_enable);
-    $('#ftAutoCq').checked = m.auto_cq;
+    $('#ftTune').classList.toggle('tune-on', !!m.tune);
+    $('#ftTune').textContent = m.tune ? 'Настройка…' : 'Настройка';
+    $('#ftAutoCq').checked = m.auto_cq; $('#ftAutoSeq').checked = m.auto_seq !== false;
     $('#ftPar').value = String(m.tx_par);
     $('#ftTxMsg').textContent = m.tx_msg || '—';
     const q = m.qso;
     const STEP = { call: 'зовём', report: 'дали рапорт', roger: 'подтвердили (R)', rr73: 'RR73 — связь в логе', '73': '73 — связь в логе' };
     $('#ftQso').textContent = q ? `Связь с ${q.call} ${q.grid || ''} · ${STEP[q.step] || q.step} · рапорт ${q.rst_sent || '—'} / ${q.rst_rcvd || '—'}` :
-      (m.tx_msg.startsWith('CQ') && m.tx_enable ? 'Зовём CQ…' : 'Связи нет');
-    const set = (id, v) => { const el = $('#' + id); if (document.activeElement === el) return; if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? ''; };
+      (st.txMsg.startsWith('CQ') && m.tx_enable ? 'Зовём CQ…' : 'Связи нет');
+    // DX позывной / локатор / рапорт — как в JTDX: подставляются из текущей связи
+    const key = q ? `${q.call}|${q.grid}|${q.rst_sent}` : '';
+    if (key && key !== st.qsoKey && ![$('#ftDxCall'), $('#ftDxGrid'), $('#ftRpt')].includes(document.activeElement)) {
+      $('#ftDxCall').value = q.call; $('#ftDxGrid').value = q.grid || '';
+      if (q.rst_sent) $('#ftRpt').value = parseInt(q.rst_sent, 10);
+      genMsgs(false);
+    }
+    st.qsoKey = key;
+    if (!msgInputs[5].value) genMsgs(false);
+    const set = (id, v) => { const el = $('#' + id); if (document.activeElement === el) return; if (el.type === 'checkbox') el.checked = v !== false && !!v; else el.value = v ?? ''; };
     set('ftCall', m.my_call); set('ftGrid', m.my_grid); set('ftPwr', m.pwr); set('ftUdpOn', m.udp_on);
-    set('ftUdpHost', m.udp_host); set('ftUdpPort', m.udp_port);
+    set('ftUdpHost', m.udp_host); set('ftUdpPort', m.udp_port); set('ftWide', m.wide);
     if (!m.lib) $('#ftQso').textContent = 'Модуль FT8 не загружен: ' + m.lib_err;
-    marks();
+    renderCur(); marks();
   }
 
   function on(m) {
@@ -2243,6 +2405,7 @@ const ft8Desk = (() => {
       case 'ft_dec':
         if (m.now) st.clockOff = m.now - Date.now() / 1000;
         addSlot(m);
+        if (!m.old) labelDecodes(m);
         if (m.clock != null) {
           const el = $('#ftDt'); el.textContent = 'dt ' + (m.clock >= 0 ? '+' : '') + m.clock.toFixed(2) + ' с';
           el.style.color = Math.abs(m.clock) > 0.7 ? 'var(--tx)' : Math.abs(m.clock) > 0.4 ? 'var(--warn)' : '';
@@ -2251,15 +2414,16 @@ const ft8Desk = (() => {
       case 'ft_tx':
         st.tx = m.on;
         $('#ftTxMsg').classList.toggle('on', m.on);
-        if (m.on) addMine(m.msg);
+        if (m.on) addMine(m.msg, m.slot);
         break;
       case 'ft_qso': addLog(m.q); toast(`В лог: ${m.q.call} ${m.q.sent}/${m.q.rcvd}`, 4000); break;
-      case 'ft_log': $('#ftLog').innerHTML = m.items.length ? '' : '<span class="muted">Пока нет</span>'; m.items.forEach(q => addLog(q)); break;
+      case 'ft_log': $('#ftLog').innerHTML = m.items.length ? '' : '<span class="muted">Пока нет</span>'; m.items.forEach(addLog); break;
       case 'ft_note': toast(m.msg, 6000); break;
     }
   }
-  function resend() { renderOn(); send({ t: 'ft_hello', on: st.on }); }
-  renderOn();
-  return { on, resend, setTx, marks };
+  function resend() { renderOn(); send({ t: 'ft_hello', on: st.on }); send({ t: 'ft_freq', rx: st.rxHz }); }
+  renderOn(); setRxLabel();
+  function setRxLabel() { $('#ftRxHz').value = st.rxHz; $('#ftRxLbl').textContent = st.rxHz + ' Гц'; }
+  return { on, resend, setTx, pickWf, marks, onRow };
 })();
 window.ft8Desk = ft8Desk;

@@ -107,6 +107,8 @@ class SimRadio:
             return 'ID0840;'
         if cmd.startswith('VE') and len(cmd) == 3:
             return {'VE0': 'VE00110;', 'VE1': 'VE10107;', 'VE2': 'VE20103;', 'VE3': 'VE30104;', 'VE4': 'VE40102;'}.get(cmd, '?;')
+        if re.match(r'^MD0.$', cmd) and len(cmd) == 4:      # как у Yaesu: смена вида — полоса по умолчанию
+            self.s['SH0'] = '000'
         if cmd == 'RI0':
             sig = 60 + 40 * np.sin(time.time() / 3)
             busy = self.s['TX'] == '0' and sig > int(self.s['SQ0'])

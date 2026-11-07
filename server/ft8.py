@@ -173,6 +173,9 @@ class Ft8Desk:
         self.udp = WsjtxUdp()
         self.hb_t = 0
         self.auto_cq = False
+        self.auto_seq = True                    # автоматика связи (Auto Seq в JTDX/MSHV)
+        self.tune = None                        # задача «Настройка» (несущая для тюнера/ALC)
+        self._wide = None                       # момент, когда увидели DATA-U (для расширения полосы)
         self._load_worked()
 
     # ------------------------------------------------------------------ настройки
@@ -197,7 +200,8 @@ class Ft8Desk:
         q = self.qso
         return {'t': 'ft_state', 'on': self.enabled, 'mode': self.mode, 'tx_enable': self.tx_enable,
                 'tx_hz': round(self.tx_hz), 'rx_hz': round(self.rx_hz), 'tx_msg': self.tx_msg,
-                'tx_par': self.tx_par, 'busy': self.busy, 'auto_cq': self.auto_cq,
+                'tx_par': self.tx_par, 'busy': self.busy, 'auto_cq': self.auto_cq, 'auto_seq': self.auto_seq,
+                'tune': self.tune is not None, 'wide': self.cfg.get('ft_wide', True),
                 'qso': {k: q[k] for k in ('call', 'grid', 'step', 'rst_sent', 'rst_rcvd')} if q else None,
                 'bands': BANDS[self.mode], 'my_call': self.my_call(), 'my_grid': self.my_grid(),
                 'udp_host': self.cfg.get('ft_udp_host', '127.0.0.1'), 'udp_port': self.cfg.get('ft_udp_port', 2237),
@@ -258,7 +262,9 @@ class Ft8Desk:
                             and self.tx_slot != kk and -0.3 < now - t_s < m['late']:
                         self.tx_slot = kk
                         asyncio.create_task(self._transmit(t_s, self.tx_msg))
-                # 3) сердцебиение для агента лога
+                # 3) полоса DATA-U: по умолчанию у трансивера 500 Гц — для FT8 нужна 3000 Гц
+                self._check_width(now)
+                # 4) сердцебиение для агента лога
                 if now - self.hb_t > 15 and self.cfg.get('ft_udp_on', True):
                     self.hb_t = now
                     self.udp.heartbeat(self.cfg.get('ft_udp_host', '127.0.0.1'), self.cfg.get('ft_udp_port', 2237),
@@ -266,6 +272,30 @@ class Ft8Desk:
                 await asyncio.sleep(0.05)
         finally:
             self.task = None
+
+    # Ширина фильтра в DATA (код SH -> Гц), как в трансивере
+    W_DATA = [500, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 600, 800, 1200, 1400, 1700, 2000, 2400,
+              3000, 3200, 3500, 4000, 4000, 4000]
+
+    def _check_width(self, now):
+        rig = self.st.rig
+        if not rig or not self.cfg.get('ft_wide', True):
+            return
+        s = rig.state
+        if s.get('mode') != 'DATA-U' or s.get('tx'):
+            self._wide = None
+            return
+        if self._wide is None:
+            self._wide = now                     # ждём, пока трансивер отдаст полосу нового вида работы
+            return
+        if self._wide is False or now - self._wide < 1.2 or s.get('width') is None:
+            return
+        self._wide = False                       # один раз на каждый вход в DATA-U
+        w = self.W_DATA[max(0, min(23, int(s['width'])))]
+        if w < 2400:
+            rig.set_param('width', 18)
+            log.info("FT8: полоса DATA-U %d Гц -> 3000 Гц", w)
+            self.bc({'t': 'ft_note', 'msg': 'Полоса приёма DATA-U была %d Гц — расширил до 3000 Гц для FT8' % w})
 
     async def _decode_slot(self, t0, k):
         m = MODES[self.mode]
@@ -296,7 +326,7 @@ class Ft8Desk:
                           'par': k % 2, 'call': call})
         items.sort(key=lambda i: i['f'])
         self.decodes = (self.decodes + [{'slot': slot, 'items': items}])[-12:]
-        self.bc({'t': 'ft_dec', 'slot': slot, 'par': k % 2, 'items': items, 'mode': self.mode, 'now': time.time(),
+        self.bc({'t': 'ft_dec', 'slot': slot, 'par': k % 2, 'items': items, 'mode': self.mode, 'now': time.time(), 't0': t0,
                  'clock': round(float(np.median(self.dts)), 2) if self.dts else None})
         self._sequence(items, k)
 
@@ -358,7 +388,7 @@ class Ft8Desk:
 
     def _sequence(self, items, k):
         mc = self.my_call()
-        if not mc or not self.tx_enable:
+        if not mc or not self.tx_enable or not self.auto_seq:
             return
         q = self.qso
         to_me = [i for i in items if i['text'].split()[:1] == [mc]]
@@ -369,7 +399,7 @@ class Ft8Desk:
                 return
         elif to_me and self.tx_msg.startswith('CQ'):
             # на наш CQ ответили — берём первого (как MSHV: самого громкого)
-            i = sorted(to_me, key=lambda x: -x['snr'])[0]
+            i = sorted(to_me, key=lambda x: (abs(x['f'] - self.rx_hz) > 100, -x['snr']))[0]
             w = i['text'].split()
             dx = w[1] if len(w) > 1 else ''
             grid = w[2] if len(w) > 2 and re.fullmatch(GRID_RE, w[2]) else ''
@@ -533,12 +563,52 @@ class Ft8Desk:
             self.busy = False
             st.push_status()
             self.bc({'t': 'ft_tx', 'on': False})
+            w = msg.split()
+            q = self.qso
+            if q and len(w) >= 3 and w[0] == q['call'] and w[-1] in ('RR73', '73', 'RRR') and not q.get('logged'):
+                self._log_qso()                  # связь вручную (без автоматики): RR73/73 ушли — в лог
             # после RR73 / 73 связь закончена — дальше CQ или тишина
-            if self.qso and self.qso.get('step') in ('rr73', '73') and self.qso.get('logged'):
+            if self.auto_seq and q and q.get('step') in ('rr73', '73') and q.get('logged'):
                 self._finish()
+
+    async def _tune(self):
+        """Несущая на частоте TX до 30 с — настроить тюнер и уровень (ALC)."""
+        st, tx = self.st, self.st.audio.tx
+        self.busy = True
+        self.bc(self.state())
+        try:
+            tx.clear()
+            st.rig.ptt(True)
+            st.push_status()
+            await asyncio.sleep(0.12)
+            ph, step, t0, sent = 0.0, SR // 20, time.monotonic(), 0
+            amp = float(self.cfg.get('ft_tx_level', 0.5))
+            w = 2 * np.pi * self.tx_hz / SR
+            while sent < 30 * SR:
+                if sent / SR - (time.monotonic() - t0) > 0.2:
+                    await asyncio.sleep(0.02)
+                    continue
+                y = (np.sin(ph + w * np.arange(step)) * amp).astype(np.float32)
+                ph = float((ph + w * step) % (2 * np.pi))
+                tx.push(y)
+                sent += step
+        except asyncio.CancelledError:
+            pass
+        finally:
+            try:
+                st.rig.ptt(False)
+                tx.clear()
+            except Exception:
+                pass
+            self.busy = False
+            self.tune = None
+            st.push_status()
+            self.bc(self.state())
 
     def halt(self):
         self.tx_enable = False
+        if self.tune:
+            self.tune.cancel()
         self.bc(self.state())
 
     # ------------------------------------------------------------------ сообщения пульта
@@ -546,6 +616,7 @@ class Ft8Desk:
         t = m['t']
         if t == 'ft_hello':
             c.ft_on = bool(m.get('on', True))
+            self._wide = None
             self.update()
             c.ws.send_json(self.state())
             for d in self.decodes[-6:]:
@@ -581,6 +652,30 @@ class Ft8Desk:
             self._set_tx('')
         elif t == 'ft_enable':
             self.tx_enable = bool(m.get('on'))
+        elif t == 'ft_auto_seq':
+            self.auto_seq = bool(m.get('on'))
+        elif t == 'ft_dx':
+            call = re.sub(r'[^A-Z0-9/]', '', str(m.get('call') or '').upper())[:11]
+            grid = re.sub(r'[^A-Z0-9]', '', str(m.get('grid') or '').upper())[:4]
+            if call:
+                if not self.qso or self.qso['call'] != call:
+                    self.qso = {'call': call, 'grid': grid, 'step': 'call', 'snr': -10, 'rst_sent': '', 'rst_rcvd': '',
+                                'on': dt.datetime.now(dt.timezone.utc).replace(tzinfo=None), 'f': self.rx_hz}
+                else:
+                    self.qso['grid'] = grid or self.qso['grid']
+                if m.get('rst'):
+                    self.qso['rst_sent'] = str(m['rst'])[:3]
+            else:
+                self.qso = None
+        elif t == 'ft_tune':
+            if m.get('on') and not self.tune:
+                why = self._why_not()
+                if why:
+                    c.ws.send_json({'t': 'ft_note', 'msg': why})
+                else:
+                    self.tune = asyncio.create_task(self._tune())
+            elif not m.get('on') and self.tune:
+                self.tune.cancel()
         elif t == 'ft_auto_cq':
             self.auto_cq = bool(m.get('on'))
         elif t == 'ft_par':
@@ -591,7 +686,7 @@ class Ft8Desk:
                 self._set_tx(txt)
                 self.tx_enable = True
         elif t == 'ft_cfg':
-            for k in ('my_grid', 'ft_pwr', 'ft_udp_host', 'ft_udp_port', 'ft_udp_on', 'ft_tries', 'ft_tx_level'):
+            for k in ('my_grid', 'ft_pwr', 'ft_udp_host', 'ft_udp_port', 'ft_udp_on', 'ft_tries', 'ft_tx_level', 'ft_wide'):
                 if k in m:
                     v = m[k]
                     if k == 'ft_udp_port':
@@ -614,4 +709,6 @@ class Ft8Desk:
 
     def stop(self):
         self.tx_enable = False
+        if self.tune:
+            self.tune.cancel()
         self.enabled = False

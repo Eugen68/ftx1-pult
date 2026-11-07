@@ -491,7 +491,8 @@ class Rig:
             cmds = ['FB%09d;' % clamp(v, 30_000, 470_000_000)]
         elif key in ('mode', 'mode_b'):
             code = MODE_CODES.get(v)
-            if code:
+            # повторная команда MD сбрасывает у Yaesu полосу фильтра к умолчанию — тот же вид не шлём
+            if code and st.get(key) != v:
                 cmds = ['MD%d%s;' % (1 if key == 'mode_b' else 0, code)]
         elif key == 'af':
             cmds = ['AG0%03d;' % clamp(v, 0, 255)]
