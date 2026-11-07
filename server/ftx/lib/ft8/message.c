@@ -3,6 +3,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ftx1-pult: stpcpy is POSIX, absent in MSVC */
+static char* ftx_stpcpy(char* dst, const char* src)
+{
+    while ((*dst = *src++) != '\0')
+        ++dst;
+    return dst;
+}
+
 #define LOG_LEVEL LOG_FATAL
 #include "debug.h"
 
@@ -1101,7 +1109,7 @@ static int unpackgrid(uint16_t igrid4, uint8_t ir, char* extra, ftx_field_t* ext
         if (ir > 0)
         {
             // In case of ir=1 add an "R " before grid
-            dst = stpcpy(dst, "R ");
+            dst = ftx_stpcpy(dst, "R ");
         }
 
         uint16_t n = igrid4;
