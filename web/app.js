@@ -110,7 +110,7 @@ function connect() {
         $('#srvInfo').textContent = `Сервер v${m.version}. PTT: ${m.ptt_method}. Ограничение передачи: ${m.max_tx} с.` + (m.audio_err ? ` ЗВУК: ${m.audio_err}` : '');
         setWfMsg(m.audio_err);
         updateSpan(true);
-        send({ t: 'cw_hello' }); cwDesk.resend(); digiDesk.resend(); voiceCq.hello(); qsoRec.hello();
+        send({ t: 'cw_hello' }); cwDesk.resend(); digiDesk.resend(); digi2.resend(); voiceCq.hello(); qsoRec.hello();
         if (C.audioOn) send({ t: 'audio', on: true, rate: C.rate });
         break;
       case 'auth_fail':
@@ -136,6 +136,7 @@ function connect() {
       default:
         if (m.t && m.t.startsWith('cw_')) cwDesk.on(m);
         else if (m.t && (m.t.startsWith('rt_') || m.t.startsWith('fax_'))) digiDesk.on(m);
+        else if (m.t && /^(nx_|psk_|sstv_)/.test(m.t)) digi2.on(m);
         else if (m.t && m.t.startsWith('vk_')) voiceCq.on(m);
         else if (m.t === 'rec_state') qsoRec.on(m);
     }
@@ -156,6 +157,8 @@ function onBinary(b) {
     wfRow(b.subarray(7, 7 + n), binHz);
   } else if (type === 5 || type === 6) {
     digiDesk.onBin(b);
+  } else if (type === 7 || type === 8) {
+    digi2.onBin(b);
   }
 }
 
@@ -597,7 +600,7 @@ function drawOverlay() {
     ctx.strokeStyle = '#3ddc84'; ctx.setLineDash([2 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath(); ctx.moveTo(X(C.cwMark), 0); ctx.lineTo(X(C.cwMark), H); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = dpr;
   }
-  for (const [hz, col] of (C.dgMarks || [])) {    // RTTY mark/space, факс чёрный/белый
+  for (const [hz, col] of (C.dgMarks || []).concat(C.dgMarks2 || [])) {    // RTTY mark/space, факс чёрный/белый
     ctx.strokeStyle = col; ctx.setLineDash([3 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath(); ctx.moveTo(X(hz), 0); ctx.lineTo(X(hz), H); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = dpr;
   }
@@ -1288,22 +1291,35 @@ const digiDesk = (() => {
     ['dwd3', 'DWD метео 10100,8 кГц (50/450)', { baud: 50, shift: 450, f: 10100800 }],
     ['dwd4', 'DWD метео 11039 кГц (50/450)', { baud: 50, shift: 450, f: 11039000 }],
     ['dwd5', 'DWD метео 14467,3 кГц (50/450)', { baud: 50, shift: 450, f: 14467300 }],
+    ['dwdlf', 'DWD метео 147,3 кГц ДВ (50/85)', { baud: 50, shift: 85, f: 147300 }],
+    ['h80', 'Любители 80 м — 3590 кГц', { baud: 45.45, shift: 170, f: 3590000, lsb: true }],
+    ['h40', 'Любители 40 м — 7043 кГц', { baud: 45.45, shift: 170, f: 7043000, lsb: true }],
+    ['h20', 'Любители 20 м — 14085 кГц', { baud: 45.45, shift: 170, f: 14085000, lsb: true }],
+    ['h15', 'Любители 15 м — 21085 кГц', { baud: 45.45, shift: 170, f: 21085000, lsb: true }],
   ];
   const FX_PRESETS = [
     ['', '— выбрать —'],
     ['d1', 'DWD Пиннеберг 3855 кГц', 3855000], ['d2', 'DWD Пиннеберг 7880 кГц', 7880000],
     ['d3', 'DWD Пиннеберг 13882,5 кГц', 13882500],
+    ['g1', 'Northwood GYA (Англия) 2618,5 кГц — ночью', 2618500], ['g2', 'Northwood GYA 4610 кГц', 4610000],
+    ['g3', 'Northwood GYA 8040 кГц', 8040000], ['g4', 'Northwood GYA 11086,5 кГц — днём', 11086500],
+    ['a1', 'Афины SVJ4 4481 кГц (утро)', 4481000], ['a2', 'Афины SVJ4 8105 кГц (утро)', 8105000],
+    ['m1', 'Мурманск RKS-72 6328,5 кГц', 6328500], ['m2', 'Мурманск RGS-47 8444 кГц', 8444000],
+    ['p1', 'С.-Петербург UGC 4212 кГц', 4212000],
   ];
   const fill = (sel, list) => { sel.innerHTML = list.map(p => `<option value="${p[0]}">${p[1]}</option>`).join(''); };
   fill($('#rtPreset'), RT_PRESETS); fill($('#fxPreset'), FX_PRESETS);
 
   // ---- переключатель RTTY / факс
+  const PANES = { rtty: 'dgRtty', fax: 'dgFax', nx: 'dgNx', sstv: 'dgSstv', psk: 'dgPsk' };
+  if (!PANES[st.sub]) st.sub = 'rtty';
   function renderSub() {
     $$('#dgSw button').forEach(b => b.classList.toggle('on', b.dataset.v === st.sub));
-    $('#dgRtty').classList.toggle('hidden', st.sub !== 'rtty');
-    $('#dgFax').classList.toggle('hidden', st.sub !== 'fax');
+    for (const [k, id] of Object.entries(PANES)) $('#' + id).classList.toggle('hidden', st.sub !== k);
   }
-  $$('#dgSw button').forEach(b => b.onclick = () => { st.sub = b.dataset.v; store.set('dgSub', st.sub); renderSub(); marks(); });
+  $$('#dgSw button').forEach(b => b.onclick = () => {
+    st.sub = b.dataset.v; store.set('dgSub', st.sub); renderSub(); marks(); window.digi2 && digi2.marks();
+  });
   renderSub();
 
   // ---- метки на водопаде
@@ -1338,7 +1354,11 @@ const digiDesk = (() => {
     const p = RT_PRESETS.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
     $('#rtBaud').value = String(p[2].baud); $('#rtShift').value = String(p[2].shift);
     st.shift = p[2].shift; st.fc = +$('#rtFc').value;
-    if (p[2].f) {                                   // частота станции — середина между тонами; ставим её на центр декодера
+    if (p[2].f && p[2].lsb) {                       // любительский RTTY — по традиции в LSB, «частота» = mark
+      setParam('mode', 'LSB'); setFreq(p[2].f + 2125);
+      toast(`LSB ${((p[2].f + 2125) / 1000).toFixed(3)} кГц: mark 2125, space 2295 Гц. Правый клик по сигналу — подстроить.`, 6000);
+      $('#rtFc').value = 2210; st.fc = 2210;
+    } else if (p[2].f) {                            // частота станции — середина между тонами; ставим её на центр декодера
       setParam('mode', 'USB'); setFreq(Math.round((p[2].f - st.fc) / 10) * 10);
       toast(`USB, ${(p[2].f / 1000).toFixed(1)} кГц на центре ${st.fc} Гц. Расписание станций меняется — сверяйтесь со свежим.`, 6000);
     }
@@ -1521,6 +1541,7 @@ const digiDesk = (() => {
     }
   }
   function pickAudio(hz) {                       // правый клик по водопаду на этой вкладке
+    if (st.sub === 'nx' || st.sub === 'psk' || st.sub === 'sstv') return digi2.pick(st.sub, hz);
     if (st.sub === 'rtty') { $('#rtFc').value = Math.round(hz); st.fc = Math.round(hz); if (!st.rt) { st.rt = true; renderRt(); } sendRt(); marks(); toast(`RTTY: центр ${st.fc} Гц`); }
     else { $('#fxCenter').value = Math.round(hz); st.fxC = Math.round(hz); st.fxD = 400; sendFx(st.fxC); marks(); toast(`Факс: центр ${st.fxC} Гц (чёрный ${st.fxC - 400}, белый ${st.fxC + 400})`); }
   }
@@ -1533,7 +1554,7 @@ const digiDesk = (() => {
     marks();
   }
   function stop() { send({ t: 'rt_stop' }); if (wrap.classList.contains('big')) wrap.classList.remove('big'); }
-  return { on, onBin, setFreq: pickAudio, resend, stop };
+  return { on, onBin, setFreq: pickAudio, resend, stop, sub: () => st.sub };
 })();
 
 // ------------------------------------------------------------------ горячие клавиши
@@ -1565,7 +1586,7 @@ const HOTKEYS = (() => {
       () => { opts.pttMode === 'toggle' ? (C.pttPressed ? pttUp() : pttDown()) : pttDown(); },
       () => { if (opts.pttMode === 'hold') pttUp(); }],
     ['stop', 'Передача', 'Стоп: снять передачу, остановить тюнер и передачу CW, отменить автоответ', ['Escape'],
-      () => { pttUp(); if (S.tuning) act('tune_stop'); cwDesk.stop(); digiDesk.stop(); voiceCq.stop(); }],
+      () => { pttUp(); if (S.tuning) act('tune_stop'); cwDesk.stop(); digiDesk.stop(); digi2.stop(); voiceCq.stop(); }],
     ['tuner', 'Передача', 'Тюнер: настроить', ['KeyT'], () => { act('tune'); note('Тюнер: настройка'); }],
     ['proc', 'Передача', 'Компрессор PROC', [], () => toggle('proc', 'PROC')],
     ['vox', 'Передача', 'VOX', [], () => toggle('vox', 'VOX')],
@@ -1915,3 +1936,174 @@ const qsoRec = (() => {
   }
   return { on, hello: () => send({ t: 'rec_hello' }), toggle: () => btn.click() };
 })();
+
+// ------------------------------------------------------------------ NAVTEX, SSTV, PSK31
+const digi2 = (() => {
+  const st = { nx: false, sv: false, pk: false, nxFc: 1700, pkFc: 1000, txText: '', svW: 320, svH: 256, svRows: 0 };
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const fill = (sel, list) => { sel.innerHTML = list.map(p => `<option value="${p[0]}">${p[1]}</option>`).join(''); };
+  const myCall = () => ($('#opCall').value || '').toUpperCase();
+  function addText(el, hint, t) {
+    $(hint)?.remove();
+    const end = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+    el.append(t);
+    if (el.textContent.length > 40000) el.textContent = el.textContent.slice(-30000);
+    if (end) el.scrollTop = el.scrollHeight;
+  }
+  // ---- метки на водопаде (только для открытого раздела)
+  function marks() {
+    const sub = digiDesk.sub(), m = [];
+    if (sub === 'nx' && st.nx) m.push([st.nxFc - 85, '#ffb547'], [st.nxFc + 85, '#4fc3ff']);
+    if (sub === 'psk' && st.pk) m.push([st.pkFc, '#3ddc84']);
+    if (sub === 'sstv' && st.sv) m.push([1200, '#ff5a4d'], [1500, '#bbbbbb'], [2300, '#ffffff']);
+    C.dgMarks2 = m; drawOverlay();
+  }
+  function pick(sub, hz) {
+    hz = Math.round(hz);
+    if (sub === 'nx') { st.nxFc = hz; $('#nxFc').value = hz; if (!st.nx) { st.nx = true; renderBtns(); } sendNx(); toast(`NAVTEX: центр ${hz} Гц`); }
+    else if (sub === 'psk') { st.pkFc = hz; $('#pkFc').value = hz; if (!st.pk) { st.pk = true; renderBtns(); } sendPk(); toast(`PSK31: ${hz} Гц`); }
+    else toast('SSTV: отдельная подстройка не нужна — сигнал занимает 1200–2300 Гц');
+    marks();
+  }
+  function renderBtns() {
+    for (const [id, on] of [['#nxDecBtn', st.nx], ['#svDecBtn', st.sv], ['#pkDecBtn', st.pk]]) {
+      $(id).classList.toggle('on', on); $(id).textContent = on ? '● Приём вкл' : '○ Приём выкл';
+    }
+  }
+
+  // ================= NAVTEX
+  const NX = [['', '— выбрать —'],
+    ['A', 'A · Новороссийск 518 кГц — 03,07,11,15,19,23 UTC', 518000], ['B', 'B · Керчь 518 кГц — 01,05,09…', 518000],
+    ['C', 'C · Одесса 518 кГц — 02:30, 06:30…', 518000], ['D', 'D · Стамбул 518 кГц — 00:30, 04:30…', 518000],
+    ['E', 'E · Самсун 518 кГц — 00:40, 04:40…', 518000], ['J', 'J · Варна 518 кГц — 01:30, 05:30…', 518000],
+    ['I', 'I · Измир 518 кГц — 01:20, 05:20…', 518000], ['L', 'L · Лимнос 518 кГц — 01:50, 05:50…', 518000],
+    ['n490', '490 кГц — турецкие станции (на турецком)', 490000],
+    ['n4209', '4209,5 кГц — Стамбул (M), Ираклион (S)', 4209500]];
+  fill($('#nxPreset'), NX);
+  function sendNx() { send({ t: 'nx_dec', on: st.nx, fc: st.nxFc }); marks(); }
+  $('#nxDecBtn').onclick = () => { st.nx = !st.nx; store.set('nxOn', st.nx); renderBtns(); sendNx(); };
+  $('#nxFc').onchange = e => { st.nxFc = +e.target.value; sendNx(); };
+  $('#nxPreset').onchange = e => {
+    const p = NX.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
+    setParam('mode', 'USB'); setFreq(p[2] - 1700);
+    st.nxFc = 1700; $('#nxFc').value = 1700; if (!st.nx) { st.nx = true; renderBtns(); }
+    sendNx(); toast(`USB ${((p[2] - 1700) / 1000).toFixed(1)} кГц. Сообщения идут по расписанию — время в списке (UTC).`, 6000);
+    e.target.value = '';
+  };
+  $('#nxClear').onclick = () => { $('#nxScreen').textContent = ''; $('#nxMsgs').innerHTML = ''; };
+  $('#nxAiBtn').onclick = () => {
+    const t = $('#nxScreen').textContent.trim(); if (!t) return toast('Пока нечего переводить');
+    $('#nxAi').classList.remove('hidden'); $('#nxAiBody').textContent = 'Перевожу…'; send({ t: 'nx_ai', text: t.slice(-3000) });
+  };
+  $('#nxAiClose').onclick = () => $('#nxAi').classList.add('hidden');
+
+  // ================= SSTV
+  const SV = [['', '— выбрать —'], ['s20', '14,230 МГц USB — главная', 14230000, 'USB'], ['s20b', '14,233 МГц USB', 14233000, 'USB'],
+    ['s15', '21,340 МГц USB', 21340000, 'USB'], ['s10', '28,680 МГц USB', 28680000, 'USB'],
+    ['s40', '7,165 МГц LSB', 7165000, 'LSB'], ['s80', '3,730 МГц LSB', 3730000, 'LSB'],
+    ['iss', '145,800 МГц FM — МКС (по объявлениям)', 145800000, 'FM']];
+  fill($('#svPreset'), SV);
+  const cv = $('#svCanvas'), ctx = cv.getContext('2d');
+  function sendSv() { send({ t: 'sstv_dec', on: st.sv, auto: $('#svAuto').checked, mode: $('#svMode').value }); marks(); }
+  $('#svDecBtn').onclick = () => { st.sv = !st.sv; store.set('svOn', st.sv); renderBtns(); sendSv(); };
+  $('#svAuto').onchange = sendSv; $('#svMode').onchange = sendSv;
+  $('#svStop').onclick = () => send({ t: 'sstv_stop' });
+  $('#svPreset').onchange = e => {
+    const p = SV.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
+    setParam('mode', p[3]); setFreq(p[2]); if (!st.sv) { st.sv = true; renderBtns(); } sendSv();
+    toast(`${p[3]} ${(p[2] / 1e6).toFixed(3)} МГц — ждём картинку`); e.target.value = '';
+  };
+  function svSize(w, h) {
+    st.svW = w; st.svH = h; st.svRows = 0;
+    cv.width = w; cv.height = h; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
+  }
+  function svRow(i, rgb) {
+    const w = rgb.length / 3, img = ctx.createImageData(w, 1);
+    for (let x = 0; x < w; x++) { img.data[x * 4] = rgb[x * 3]; img.data[x * 4 + 1] = rgb[x * 3 + 1]; img.data[x * 4 + 2] = rgb[x * 3 + 2]; img.data[x * 4 + 3] = 255; }
+    if (w !== cv.width) svSize(w, st.svH);
+    ctx.putImageData(img, 0, i); st.svRows = i + 1;
+  }
+  $('#svPng').onclick = () => {
+    if (!st.svRows) return toast('Картинки пока нет');
+    const a = document.createElement('a'); a.download = 'sstv_' + Date.now() + '.png'; a.href = cv.toDataURL('image/png'); a.click();
+  };
+
+  // ================= PSK31
+  const PK = [['', '— выбрать —'], ['80', '80 м — 3580 кГц', 3580000], ['40', '40 м — 7040 кГц', 7040000],
+    ['30', '30 м — 10142 кГц', 10142000], ['20', '20 м — 14070 кГц', 14070000], ['17', '17 м — 18100 кГц', 18100000],
+    ['15', '15 м — 21070 кГц', 21070000], ['12', '12 м — 24920 кГц', 24920000], ['10', '10 м — 28120 кГц', 28120000]];
+  fill($('#pkPreset'), PK);
+  function sendPk() { send({ t: 'psk_dec', on: st.pk, fc: st.pkFc, afc: $('#pkAfc').checked }); marks(); }
+  $('#pkDecBtn').onclick = () => { st.pk = !st.pk; store.set('pkOn', st.pk); renderBtns(); sendPk(); };
+  $('#pkFc').onchange = e => { st.pkFc = +e.target.value; sendPk(); };
+  $('#pkAfc').onchange = sendPk;
+  $('#pkPreset').onchange = e => {
+    const p = PK.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
+    setParam('mode', 'DATA-U'); setFreq(p[2]); if (!st.pk) { st.pk = true; renderBtns(); } sendPk();
+    toast('DATA-U ' + (p[2] / 1000) + ' кГц. Правый клик по «ниточке» сигнала на водопаде — настроиться.', 6000); e.target.value = '';
+  };
+  $('#pkClear').onclick = () => { $('#pkScreen').textContent = ''; };
+  const PKM = [['CQ', 'CQ CQ CQ de {MY} {MY} {MY} pse k\n'], ['DE', 'de {MY} k\n'], ['73', 'tnx fer QSO, 73 de {MY} sk\n']];
+  $('#pkMacros').innerHTML = PKM.map((m, i) => `<button class="btn" data-i="${i}">${m[0]}</button>`).join('');
+  $$('#pkMacros button').forEach(b => b.onclick = () => {
+    const t = PKM[+b.dataset.i][1]; if (!myCall()) return toast('Укажите свой позывной на вкладке CW · Морзе');
+    pkSend(t);
+  });
+  function pkSend(t) { t = (t || '').replace(/\{MY\}/g, myCall()); if (t.trim()) send({ t: 'psk_send', text: '\n' + t }); }
+  $('#pkSend').onclick = () => pkSend($('#pkText').value);
+  $('#pkStop').onclick = () => send({ t: 'psk_stop' });
+  $('#pkText').addEventListener('keydown', e => { if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); pkSend($('#pkText').value); } });
+  const txProg = p => { $('#pkTxLine').innerHTML = `<span class="done">${esc(st.txText.slice(0, p))}</span>${esc(st.txText.slice(p))}`; };
+
+  // ================= сообщения
+  function on(m) {
+    switch (m.t) {
+      case 'nx_state': if (m.fc) { st.nxFc = m.fc; $('#nxFc').value = m.fc; } break;
+      case 'nx_rx': addText($('#nxScreen'), '#nxHint', m.text); break;
+      case 'nx_info': $('#nxInfo').textContent = m.sync ? `синхронизация ✓ · ${m.fc} Гц` : `поиск сигнала · ${m.fc} Гц`; break;
+      case 'nx_msg':
+        $('#nxMsgs').insertAdjacentHTML('afterbegin', `<span class="m">${m.time} <b>${esc(m.b1)}${esc(m.b2)}${esc(m.num)}</b> ${esc(m.station || 'станция ' + m.b1)} — ${esc(m.subject || m.b2)}</span>`);
+        addText($('#nxScreen'), '#nxHint', `\n──── ${m.station || m.b1}: ${m.subject || m.b2} (${m.time}) ────\n`); break;
+      case 'nx_end': addText($('#nxScreen'), '#nxHint', '\n──── конец сообщения ────\n'); break;
+      case 'nx_ai': $('#nxAiBody').textContent = m.ru; $('#nxAiModel').textContent = m.model || ''; break;
+      case 'nx_ai_err': $('#nxAi').classList.remove('hidden'); $('#nxAiBody').textContent = 'Перевод недоступен: ' + m.msg + ' Приём NAVTEX работает и без ИИ.'; break;
+      case 'sstv_state':
+        if (m.modes && $('#svMode').options.length < 2) $('#svMode').insertAdjacentHTML('beforeend', m.modes.map(x => `<option>${x}</option>`).join(''));
+        if (m.state === 'image' && m.w) svSize(m.w, m.h);
+        $('#svInfo').textContent = m.state === 'image' ? 'приём: ' + m.mode : 'ждёт картинку';
+        $('#svSaved').innerHTML = (m.saved || []).length ? '<b>Сохранены на ПК (папка sstv):</b>' + m.saved.slice().reverse().map(n => `<div class="muted">${esc(n)}</div>`).join('') : '';
+        break;
+      case 'sstv_start':
+        svSize(m.w, m.h); $('#svInfo').textContent = `приём: ${m.mode} (${m.how}${m.shift ? ', расстройка ' + m.shift + ' Гц' : ''})`;
+        toast('SSTV: началась картинка ' + m.mode); break;
+      case 'sstv_done':
+        $('#svInfo').textContent = `${m.mode}: ${m.why}, ${m.rows} строк` + (m.slant ? `, наклон ${m.slant} ppm` : '');
+        if (m.name) { toast('SSTV сохранена: ' + m.name, 5000); $('#svSaved').insertAdjacentHTML('afterbegin', `<div class="muted">${esc(m.name)}</div>`); }
+        break;
+      case 'psk_state': if (m.fc) { st.pkFc = Math.round(m.fc); $('#pkFc').value = st.pkFc; } break;
+      case 'psk_rx': addText($('#pkScreen'), '#pkHint', m.text); break;
+      case 'psk_info':
+        $('#pkInfo').textContent = `${m.fc} Гц · качество ${Math.round(m.q * 100)}%`;
+        if (Math.abs(m.fc - st.pkFc) >= 1) { st.pkFc = Math.round(m.fc); marks(); }
+        break;
+      case 'psk_tx_start': st.txText = m.text.trim(); $('#pkTxLine').classList.remove('hidden'); txProg(0); addText($('#pkScreen'), '#pkHint', '\n» ' + st.txText + '\n'); break;
+      case 'psk_tx_progress': txProg(m.pos); break;
+      case 'psk_tx_done': txProg(st.txText.length); setTimeout(() => $('#pkTxLine').classList.add('hidden'), 1200); if (m.msg) toast(m.msg, 6000); break;
+    }
+  }
+  function onBin(b) {
+    const dv = new DataView(b.buffer, b.byteOffset), a = dv.getUint16(1, true), W = dv.getUint16(3, true);
+    if (b[0] === 7) svRow(a, b.subarray(5, 5 + W * 3));
+    else if (b[0] === 8) { svSize(W, Math.max(st.svH, a)); for (let y = 0; y < a; y++) svRow(y, b.subarray(5 + y * W * 3, 5 + (y + 1) * W * 3)); }
+  }
+  function resend() {
+    st.nx = store.get('nxOn', false); st.sv = store.get('svOn', false); st.pk = store.get('pkOn', false);
+    renderBtns();
+    if (st.nx) sendNx();
+    send({ t: 'sstv_dec', on: st.sv, auto: $('#svAuto').checked, mode: $('#svMode').value });
+    if (st.pk) sendPk();
+    marks();
+  }
+  return { on, onBin, resend, pick, marks, stop: () => send({ t: 'psk_stop' }) };
+})();
+window.digi2 = digi2;

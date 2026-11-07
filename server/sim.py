@@ -213,6 +213,7 @@ class SimDigi:
 
     def __init__(self):
         self.rt = self.fx = None
+        self.audio_st = []
         threading.Thread(target=self._build, daemon=True).start()
 
     def _build(self):
@@ -234,6 +235,19 @@ class SimDigi:
             d = np.hypot(xx - 380, (yy - 70) * 1.3)
             img[np.abs(d - r) < 1.2] = 0.2
         img[:4], img[-4:], img[:, :4], img[:, -4:] = 0, 0, 0, 0
+        # «звуковые» станции: слышны, когда трансивер настроен точно (±300 Гц) — для проверки декодеров
+        import navtex, psk31, sstv
+        nx = navtex.navtex_synth('ZCZC AE12\nNOVOROSSIYSK RADIO\nWEATHER FORECAST BLACK SEA 0600 UTC:\n'
+                                 'WIND SW 10-15 M/S, SEA 2 M, VIS 5-10 NM.\nNNNN\n', fc=1700, amp=0.1)
+        ps = psk31.psk31_tx('   CQ CQ CQ de UA6LUQ UA6LUQ pse k\n', fc=1000, amp=0.1, pre=48)
+        yy, xx = np.mgrid[0:240, 0:320]
+        pic = np.stack([xx * 255 // 320, yy, ((xx // 40 + yy // 40) % 2) * 255], -1).astype(np.uint8)
+        pic[100:130, :, :] = 255
+        sv = sstv.sstv_synth(pic, 'Robot 36', amp=0.1)
+        gap = lambda s_: np.zeros(int(s_ * SR), np.float32)
+        self.audio_st = [(516300, np.concatenate([nx, gap(15)])),
+                         (14070000, np.concatenate([ps, gap(8)])),
+                         (14230000, np.concatenate([sv, gap(20)]))]
         v = digi.fax_values(img, phasing=20)
         gap = np.full(int(15 * SR), 0.5)
         v = np.concatenate([v, gap])
@@ -242,6 +256,9 @@ class SimDigi:
 
     def block(self, f0, t, n0):
         out = np.zeros(len(t), np.float32)
+        for fd, arr in getattr(self, 'audio_st', []):
+            if abs(f0 - fd) < 300:
+                out += arr[(n0 + np.arange(len(t))) % len(arr)]
         for kind, fs, arr in (('rt', self.RTTY_F, self.rt), ('fx', self.FAX_F, self.fx)):
             if arr is None:
                 continue

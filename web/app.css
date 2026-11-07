@@ -379,3 +379,13 @@ body.fit .cw-screen { max-height: 30vh; }
 .rec-list { display: grid; gap: 4px; }
 .rec-list a { color: var(--acc, #39c5e0); text-decoration: none; }
 .rec-list .row { display: flex; gap: 10px; align-items: center; }
+
+/* ---------- NAVTEX / SSTV / PSK31 */
+.nx-msgs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.nx-msgs .m { border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; }
+.nx-msgs .m b { color: var(--acc, #39c5e0); }
+.sv-wrap { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+#svCanvas { background: #000; border: 1px solid var(--line); border-radius: 6px; height: min(40vh, 384px); width: auto; max-width: 100%; aspect-ratio: auto; }
+.sv-side { flex: 1 1 200px; min-width: 180px; }
+#svSaved a { display: block; color: var(--acc, #39c5e0); }
+#dgSw { flex-wrap: wrap; }

@@ -123,7 +123,7 @@
       <button data-tab="tx">Передача</button>
       <button data-tab="vfo">VFO/Память</button>
       <button data-tab="cw">CW · Морзе</button>
-      <button data-tab="digi">RTTY · Факс</button>
+      <button data-tab="digi">Цифра</button>
       <button data-tab="menu">Меню</button>
       <button data-tab="cat">CAT</button>
       <button data-tab="opts">Настройки</button>
@@ -315,7 +315,7 @@
 
     <div class="tab" id="tab-digi">
       <div class="dg-head">
-        <div class="seg" id="dgSw"><button data-v="rtty" class="on">RTTY · телетайп</button><button data-v="fax">WEFAX · метеофакс</button></div>
+        <div class="seg" id="dgSw"><button data-v="rtty" class="on">RTTY</button><button data-v="fax">Метеофакс</button><button data-v="nx">NAVTEX</button><button data-v="sstv">SSTV</button><button data-v="psk">PSK31</button></div>
         <span class="muted small" id="dgHint">Правый клик по водопаду — настроить декодер на сигнал</span>
       </div>
 
@@ -373,6 +373,71 @@
         <div class="fx-wrap" id="fxWrap"><button class="btn small fx-close" id="fxClose" title="Esc">✕</button><canvas id="fxCanvas"></canvas><div class="fx-empty muted" id="fxEmpty"><div>Метеофакс принимается в <b>USB</b> на 1,9 кГц ниже частоты станции (выберите станцию в списке — частота и вид работы поставятся сами). Полоса WIDTH — не уже 2,4 кГц: сигнал занимает 1500–2300 Гц.
           Картинка начнётся сама по тону старта. Клик по картинке — указать, где левый край карты; ◀ ▶ — исправить наклон.</div></div></div>
         <div class="muted small" id="fxSaved"></div>
+      </div>
+
+      <!-- ===== NAVTEX ===== -->
+      <div id="dgNx" class="hidden">
+        <div class="cw-bar">
+          <button class="btn" id="nxDecBtn">○ Приём выкл</button>
+          <label class="mini" title="Середина между тонами (сдвиг 170 Гц), Гц звука">Центр<input type="number" id="nxFc" class="num" min="500" max="2900" step="5" value="1700"></label>
+          <span class="cw-meter mono" id="nxInfo">—</span>
+          <span class="spacer"></span>
+          <label class="mini">Станция<select id="nxPreset"></select></label>
+          <button class="btn small" id="nxClear">Очистить</button>
+          <button class="btn small" id="nxAiBtn" title="Перевести принятое (нужна LM Studio)">Перевести (ИИ)</button>
+        </div>
+        <div class="nx-msgs small" id="nxMsgs"></div>
+        <div class="cw-screen dg-screen mono" id="nxScreen"><span class="muted" id="nxHint">NAVTEX — морские предупреждения и прогнозы на 518 кГц. Выберите станцию: трансивер встанет в USB на 516,3 кГц,
+          сигнал окажется около 1700 Гц. Станции передают по расписанию (время — в списке); между сеансами эфир пустой.
+          Ближайшая — Новороссийск (A), на 518 кГц её хорошо слышно на десятки и сотни километров.</span></div>
+        <div class="cw-ai hidden" id="nxAi"><div class="cw-ai-head"><b>Перевод</b><span class="muted small" id="nxAiModel"></span><span class="spacer"></span><button class="btn small" id="nxAiClose">✕</button></div><div class="cw-ai-body small" id="nxAiBody"></div></div>
+      </div>
+
+      <!-- ===== SSTV ===== -->
+      <div id="dgSstv" class="hidden">
+        <div class="cw-bar">
+          <button class="btn" id="svDecBtn">○ Приём выкл</button>
+          <label class="mini" title="Обычно вид картинки узнаётся сам (по коду VIS или по синхроимпульсам)">Вид<select id="svMode"><option value="">авто</option></select></label>
+          <label class="chk mini" title="Начинать картинку и без кода VIS — по синхроимпульсам (если начало пропущено)"><input type="checkbox" id="svAuto" checked> ловить с середины</label>
+          <button class="btn small" id="svStop">Стоп и сохранить</button>
+          <span class="cw-meter mono" id="svInfo">—</span>
+          <span class="spacer"></span>
+          <label class="mini">Частота<select id="svPreset"></select></label>
+          <button class="btn small" id="svPng">💾 PNG</button>
+        </div>
+        <div class="sv-wrap"><canvas id="svCanvas" width="320" height="256"></canvas>
+          <div class="sv-side small">
+            <p class="muted">SSTV — картинки от радиолюбителей: 14,230 МГц USB (самая людная), 21,340, 28,680 МГц; на 80 и 40 м — LSB.
+              На 145,800 МГц FM — сеансы с МКС (о них объявляют заранее). Картинка начнётся сама; виды Martin, Scottie, Robot 36, PD.</p>
+            <div id="svSaved"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== PSK31 ===== -->
+      <div id="dgPsk" class="hidden">
+        <div class="cw-bar">
+          <button class="btn" id="pkDecBtn">○ Приём выкл</button>
+          <label class="mini" title="Частота сигнала в звуке, Гц — правый клик по нему на водопаде">Частота<input type="number" id="pkFc" class="num" min="200" max="3500" step="1" value="1000"></label>
+          <label class="chk mini" title="Автоподстройка к сигналу"><input type="checkbox" id="pkAfc" checked> АПЧ</label>
+          <span class="cw-meter mono" id="pkInfo">—</span>
+          <span class="spacer"></span>
+          <label class="mini">Диапазон<select id="pkPreset"></select></label>
+          <button class="btn small" id="pkClear">Очистить</button>
+        </div>
+        <div class="cw-screen dg-screen mono" id="pkScreen"><span class="muted" id="pkHint">PSK31 — тихие текстовые связи: на водопаде это тонкие «ниточки». Выберите диапазон, затем правый клик
+          по ниточке на водопаде — декодер встанет на неё. Передача — в режиме DATA-U.</span></div>
+        <div class="cw-tx">
+          <div class="cw-macros" id="pkMacros"></div>
+          <div class="cw-txrow">
+            <textarea id="pkText" class="mono" rows="2" placeholder="Текст PSK31 (Ctrl+Enter — передать). {MY} — ваш позывной"></textarea>
+            <div class="cw-txbtns">
+              <button class="btn primary" id="pkSend">▶ Передать</button>
+              <button class="btn" id="pkStop">■ Стоп</button>
+            </div>
+          </div>
+          <div class="cw-txline mono hidden" id="pkTxLine"></div>
+        </div>
       </div>
     </div>
 

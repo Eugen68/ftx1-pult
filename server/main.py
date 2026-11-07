@@ -45,7 +45,7 @@ from digidesk import DigiDesk  # noqa: E402
 from voicecq import VoiceCq  # noqa: E402
 from recorder import QsoRecorder  # noqa: E402
 
-VERSION = "1.8"
+VERSION = "1.9"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -733,7 +733,7 @@ class Station:
         if t.startswith('vk_'):
             await self.vk.on_msg(c, m)
             return
-        if t.startswith('rt_') or t.startswith('fax_'):
+        if t.startswith(('rt_', 'fax_', 'nx_', 'psk_', 'sstv_')):
             await self.digi.on_msg(c, m)
             return
         if t == 'audio':
@@ -979,6 +979,28 @@ def selftest(path):
     except Exception as e:
         ok = False
         rep.append('FAIL rtty: %s' % e)
+    try:                                     # NAVTEX и PSK31 «сам на себя»
+        import navtex
+        import psk31
+        got = []
+        d = navtex.NavtexDecoder(lambda e: got.append(e.get('text', '')) if e['t'] == 'nx_rx' else None)
+        d.configure(enabled=True)
+        x = navtex.navtex_synth('ZCZC AE01\nTEST R6AAF\nNNNN\n')
+        for i in range(0, len(x), 960):
+            d.process(x[i:i + 960])
+        good = 'R6AAF' in ''.join(got)
+        got2 = []
+        p = psk31.Psk31Decoder(lambda e: got2.append(e.get('text', '')) if e['t'] == 'psk_rx' else None)
+        p.configure(enabled=True, fc=1000)
+        x = psk31.psk31_tx('cq de R6AAF k', fc=1000, pre=48)
+        for i in range(0, len(x), 960):
+            p.process(x[i:i + 960])
+        good &= 'R6AAF' in ''.join(got2)
+        ok &= good
+        rep.append(('OK   ' if good else 'FAIL ') + 'navtex+psk31 loopback')
+    except Exception as e:
+        ok = False
+        rep.append('FAIL navtex/psk31: %s' % e)
     good = os.path.isfile(os.path.join(RES, 'menu_ftx1.json'))
     ok &= good
     rep.append(('OK   ' if good else 'FAIL ') + 'menu_ftx1.json')
