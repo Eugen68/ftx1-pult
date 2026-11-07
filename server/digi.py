@@ -275,7 +275,7 @@ class FaxDecoder:
         self.auto = True
         self.slant = 0.0                    # ppm поправка частоты дискретизации
         self.afc = True                     # подстройка центра/девиации по тону старта и фазированию
-        h = np.sinc(2 * 950 / self.FS * (np.arange(63) - 31)) * np.blackman(63)
+        h = np.sinc(2 * 750 / self.FS * (np.arange(63) - 31)) * np.blackman(63)   # ±750: сигнал ±400 + запас на АПЧ
         self.lp = (h / h.sum()).astype(np.float32)
         self.reset()
 
@@ -290,6 +290,7 @@ class FaxDecoder:
         self.val = np.zeros(0, np.float32)      # демодулированная яркость, ждущая разбиения на строки
         self.pos = 0.0                          # начало текущей строки в self.val
         self.tone_buf = np.zeros(0, np.float32)
+        self.ftail = np.zeros(0, np.float32)
         self.fbuf = np.zeros(0, np.float32)     # мгновенная частота (Гц), последние 4 с — для АПЧ и индикатора
         self.sig = {'q': 0.0, 'lo': 0, 'hi': 0}
         self.stat_t = 0
@@ -368,6 +369,11 @@ class FaxDecoder:
         self.prev = z[-1] if len(z) else self.prev
         dphi = np.angle(zz[1:] * np.conj(zz[:-1]))
         f = (self.center + dphi * self.FS / (2 * np.pi)).astype(np.float32)
+        # медиана по 3 отсчётам: «щелчки» ЧМ-детектора на шуме не превращаются в чёрно-белые точки
+        ff = np.concatenate([self.ftail, f])
+        if len(ff) >= 3:
+            self.ftail = ff[-2:]
+            f = np.median(np.stack([ff[:-2], ff[1:-1], ff[2:]]), axis=0).astype(np.float32)
         v = np.clip((f - (self.center - self.dev)) / (2 * self.dev), 0, 1).astype(np.float32)
         self.fbuf = np.concatenate([self.fbuf, f])[-4 * self.FS:]
         self._stats()
@@ -407,10 +413,24 @@ class FaxDecoder:
             return
         self.stat_t = self.nsamp
         f = self.fbuf[-2 * self.FS:]
-        lo, hi = np.percentile(f, [3, 97])
-        q = float(np.mean(np.abs(f - self.center) < self.dev + 120))     # доля «внутри» 1500–2300
-        # у шума частота размазана по всей полосе фильтра; у факса сидит между чёрным и белым
-        self.sig = {'q': round(q, 2), 'lo': int(lo), 'hi': int(hi)}
+        lo, hi = np.percentile(f, [2, 98])
+        span = hi - lo
+        # у шума частота размазана по всей полосе фильтра (~1400 Гц и шире),
+        # у факса она между чёрным и белым — около 800 Гц, где бы ни стоял центр
+        fax = 550 < span < 1150
+        self.sig = {'q': 1.0 if fax else 0.0, 'lo': int(lo), 'hi': int(hi)}
+        # постоянная мягкая АПЧ: если центр ушёл (например, правый клик по белой линии) — вернётся сам
+        if self.afc and fax and self.state != 'idle':
+            # по гистограмме: самый частый уровень — фон карты (обычно белый); шум его не сдвигает
+            edges = np.arange(self.center - 900, self.center + 901, 20)
+            h, _ = np.histogram(f, edges)
+            h = np.convolve(h, np.ones(3) / 3, 'same')
+            k = int(np.argmax(h))
+            pk = (edges[k] + edges[k + 1]) / 2
+            if h[k] > 4 * (np.median(h) + 1):
+                c = pk - self.dev if pk > self.center - 100 else pk + self.dev
+                if abs(c - self.center) > 30:
+                    self.center += 0.5 * (c - self.center)
 
     def _afc(self, what):
         """Тон старта и фазирование — чистые чёрный и белый: по ним уточняем центр и девиацию."""
@@ -505,7 +525,9 @@ class FaxDecoder:
                 good = res <= max(3.0, 3 * np.median(res))
                 if good.sum() >= 6:
                     slope, icpt = np.polyfit(k[good], p[good], 1)
-            if 0.05 < abs(slope) < 0.01 * self.W:
+            res_sd = float(np.std(p - (icpt + slope * k)))
+            # наклон берём только по уверенному фазированию: ≥10 строк и импульс ровно ложится на прямую
+            if len(p) >= 10 and res_sd < 3 and 0.05 < abs(slope) < 0.01 * self.W:
                 self.slant += slope / self.W * 1e6
                 self.slant = float(np.clip(self.slant, -3000, 3000))
             cur = (icpt + slope * len(p)) % self.W         # где импульс сейчас
