@@ -61,7 +61,8 @@ def fsk_tones(fc, shift, reverse=False):
 def rtty_afsk(text, baud=45.45, shift=170, fc=2210, reverse=False, fs=SR, lead=0.4, amp=0.5):
     """Готовый звук AFSK (float32, fs) для передачи."""
     f = rtty_freqs(text, baud, shift, fc, reverse, fs, lead)
-    ph = 2 * np.pi * np.cumsum(f) / fs
+    # фаза — в float64: в float32 сумма за ~10 с теряет точность, и тоны «плывут» (передача портилась)
+    ph = np.mod(2 * np.pi * np.cumsum(f, dtype=np.float64) / fs, 2 * np.pi)
     x = np.sin(ph) * amp
     r = int(0.005 * fs)
     x[:r] *= np.linspace(0, 1, r)
@@ -188,33 +189,72 @@ class RttyDecoder:
         if changed:
             self.reset()
 
-    def autotune(self, x8k=None):
-        """Найти пару тонов с заданным сдвигом по накопленному спектру."""
+    def _psd(self):
+        """Спектр, усреднённый по нескольким секундам: одиночные всплески не сбивают поиск."""
         s = self.spec
-        if len(s) < 8000:
-            return None
-        N = 8192
-        seg = s[-N:] * np.hanning(min(N, len(s)))
-        sp = np.abs(np.fft.rfft(seg, N))
-        f = np.fft.rfftfreq(N, 1 / self.FS)
+        if len(s) < 8192:
+            return None, None
+        sp = np.abs(np.fft.rfft(s[-8192:] * np.hanning(8192))) ** 2
+        f = np.fft.rfftfreq(8192, 1 / self.FS)
+        old = getattr(self, 'psd', None)
+        self.psd = sp if old is None or len(old) != len(sp) else 0.6 * old + 0.4 * sp
+        sm = np.convolve(self.psd, np.ones(15) / 15, mode='same')       # ±7 Гц
+        return f, sm
+
+    def _scores(self, f, sm, lo_c, hi_c):
+        """Оценка каждого возможного центра: слабейший из двух тонов (оба должны быть сильными)."""
         df = f[1]
-        k = int(round(self.shift / df))
-        band = (f > 300) & (f < 3300 - self.shift)
-        idx = np.nonzero(band)[0]
-        sm = np.convolve(sp, np.ones(5) / 5, mode='same')
-        score = sm[idx] + sm[np.minimum(idx + k, len(sm) - 1)]
-        i = idx[int(np.argmax(score))]
-        if score.max() < np.median(sm[band]) * 12:
+        c = np.arange(max(lo_c, 250 + self.shift / 2), min(hi_c, 3450 - self.shift / 2), 2.0)
+        if not len(c):
+            return c, c
+        lo = np.interp(c - self.shift / 2, f, sm)
+        hi = np.interp(c + self.shift / 2, f, sm)
+        return c, np.minimum(lo, hi)
+
+    def autotune(self, x8k=None):
+        """Найти пару тонов с заданным сдвигом во всей полосе."""
+        f, sm = self._psd()
+        if f is None:
             return None
-        self.fc = float(f[i] + self.shift / 2)
+        c, sc = self._scores(f, sm, 0, 4000)
+        noise = np.median(sm[(f > 200) & (f < 3500)])
+        if not len(sc) or sc.max() < noise * 10:
+            return None
+        self.fc = float(c[int(np.argmax(sc))])
         self.reset()
         return self.fc
+
+    def _afc(self):
+        """АПЧ: если рядом (±400 Гц) пара тонов заметно сильнее, чем на текущем центре — переходим туда;
+        если декодер долго выдаёт ошибки — ищем во всей полосе."""
+        f, sm = self._psd()
+        if f is None:
+            return
+        noise = np.median(sm[(f > 200) & (f < 3500)])
+        cur = float(np.minimum(np.interp(self.fc - self.shift / 2, f, sm), np.interp(self.fc + self.shift / 2, f, sm)))
+        bad = self.u[self.best].score() > 0.35 if hasattr(self, 'u') else True
+        span = 4000 if bad else 400
+        c, sc = self._scores(f, sm, self.fc - span, self.fc + span)
+        if not len(sc):
+            return
+        k = int(np.argmax(sc))
+        if sc[k] > noise * 8 and sc[k] > 2.5 * max(cur, noise) and abs(c[k] - self.fc) > 6:
+            self.fc = float(c[k])
+        elif sc[k] > noise * 8:                       # тонкая подстройка в пределах ±15 Гц
+            near = np.abs(c - self.fc) <= 15
+            if near.any():
+                j = np.nonzero(near)[0][int(np.argmax(sc[near]))]
+                self.fc += 0.5 * (c[j] - self.fc)
 
     def process(self, x48):
         if not self.enabled:
             return
         x = self.dec.process(x48)
         self.spec = np.concatenate([self.spec, x])[-16384:]
+        self.afc_n = getattr(self, 'afc_n', 0) + len(x)
+        if self.afc_n >= 2 * self.FS:
+            self.afc_n = 0
+            self._afc()
         n = len(x)
         spb = self.FS / self.baud
         L = max(8, int(round(spb)))          # согласованный фильтр — длина бита

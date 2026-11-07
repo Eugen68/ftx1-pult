@@ -222,7 +222,7 @@ class SimDigi:
                'WESTERN PART: SW 4 TO 5, LATER W 6, SEA 1.5 M. VIS GOOD.\n'
                'EASTERN PART: S 3 TO 4, RAIN SHOWERS, VIS MODERATE. 73 NNNN\n')
         f = digi.rtty_freqs(txt * 3, baud=50, shift=450, fc=0, lead=1.0)
-        self.rt = np.cumsum(2 * np.pi * f / SR)
+        self.rt = np.cumsum(2 * np.pi * f.astype(np.float64) / SR)
         self.rt_w = self.rt[-1] + 2 * np.pi * f[-1] / SR
         # «карта»: сетка, побережье, изобары и рамка
         H, W = 160, 600
