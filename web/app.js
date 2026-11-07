@@ -716,6 +716,21 @@ $('#volume').value = C.gain * 100;
 $('#volume').oninput = e => { C.gain = e.target.value / 100; store.set('vol', +e.target.value); C.player && C.player.port.postMessage({ gain: C.gain }); };
 
 // ------------------------------------------------------------------ микрофон и PTT
+function micErrorText(e) {
+  const n = e && e.name, m = (e && e.message) || '';
+  if (n === 'NotAllowedError' && /system/i.test(m))
+    return 'Windows запрещает программам доступ к микрофону. Параметры Windows → Конфиденциальность и защита → ' +
+      'Микрофон: включите «Доступ к микрофону» и «Разрешить классическим приложениям доступ к микрофону», затем перезапустите браузер.';
+  if (n === 'NotAllowedError' || n === 'SecurityError')
+    return 'браузер запретил микрофон для этого сайта. Нажмите значок слева от адреса → «Микрофон» → разрешить и обновите страницу.';
+  if (n === 'NotFoundError' || n === 'OverconstrainedError')
+    return 'микрофон не найден. Подключите микрофон/гарнитуру или выберите другой в списке «Микрофон этого устройства» ' +
+      '(и проверьте, что он не отключён в Параметры → Система → Звук → Ввод).';
+  if (n === 'NotReadableError' || n === 'AbortError')
+    return 'микрофон занят или не запускается: закройте программы, которые держат его монопольно (Discord, Zoom, OBS), ' +
+      'или снимите галочку «Разрешить приложениям монопольный режим» в свойствах микрофона.';
+  return (n ? n + ': ' : '') + m;
+}
 async function startMic() {
   if (C.micStream) return true;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -730,7 +745,12 @@ async function startMic() {
         echoCancellation: opts.echo, noiseSuppression: opts.ns, autoGainControl: opts.agc,
       },
     });
-  } catch (e) { toast('Нет доступа к микрофону: ' + e.message, 5000); return false; }
+  } catch (e) {
+    const why = micErrorText(e);
+    toast('Нет доступа к микрофону: ' + why, 9000);
+    const r = $('#micTestRes'); if (r) r.textContent = '✗ ' + why;
+    return false;
+  }
   const src = ac.createMediaStreamSource(C.micStream);
   const hp = new BiquadFilterNode(ac, { type: 'highpass', frequency: 120 });
   const lp = new BiquadFilterNode(ac, { type: 'lowpass', frequency: C.rate === 8000 ? 3200 : 3800, Q: 0.7 });
@@ -948,6 +968,15 @@ function initOpts() {
     send({ t: 'audio', on: C.audioOn, rate: C.rate });
   };
   $('#optMic').onchange = e => { opts.micId = e.target.value; saveOpts(); resetMic(); };
+  $('#micTest').onclick = async () => {
+    $('#micTestRes').textContent = 'Включаю микрофон…';
+    if (await startMic()) {
+      const lab = C.micStream.getAudioTracks()[0]?.label || 'микрофон';
+      $('#micTestRes').textContent = /USB Audio (Device|CODEC)/i.test(lab)
+        ? '⚠ Сейчас выбран «' + lab + '» — это звуковая карта трансивера, а не ваш микрофон. Выберите свой в списке выше.'
+        : '✓ Работает: ' + lab + '. Скажите что-нибудь — полоска слева от PTT должна двигаться.';
+    }
+  };
   $('#optMicGain').value = opts.micGain; $('#optMicGainV').textContent = opts.micGain;
   $('#optMicGain').oninput = e => { opts.micGain = +e.target.value; $('#optMicGainV').textContent = opts.micGain; saveOpts(); if (C.micGainNode) C.micGainNode.gain.value = opts.micGain / 100; };
   for (const [id, k] of [['optEcho', 'echo'], ['optNs', 'ns'], ['optAgc', 'agc']]) {

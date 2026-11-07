@@ -389,6 +389,8 @@
           <select id="optRate"><option value="48000">48 кГц — без сжатия (этот ПК, проводная сеть)</option><option value="16000">16 кГц (Wi-Fi, телефон дома)</option><option value="8000">8 кГц (мобильный интернет)</option></select></label>
         <p class="muted small" id="audioStat"></p>
         <label>Микрофон этого устройства <select id="optMic"><option value="">По умолчанию</option></select></label>
+        <div class="row"><button class="btn small" id="micTest" title="Включить микрофон без передачи и проверить уровень">🎙 Проверить микрофон</button>
+          <span class="muted small" id="micTestRes">Передатчик при проверке не включается</span></div>
         <label>Усиление микрофона, % <input id="optMicGain" type="range" min="10" max="400" value="100"><span id="optMicGainV">100</span></label>
         <label class="chk"><input type="checkbox" id="optEcho" checked> Эхоподавление</label>
         <label class="chk"><input type="checkbox" id="optNs" checked> Шумоподавление микрофона</label>
