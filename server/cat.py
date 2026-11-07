@@ -125,7 +125,8 @@ PARSERS = [
     (r'AI(\d)', lambda m: {'ai': int(m.group(1))}),
     (r'ID(\d{4})', lambda m: {'radio_id': m.group(1)}),
     (r'RI\d{7}(\d)\d*', lambda m: {'busy': m.group(1) == '1'}),   # P8: шумоподавитель открыт / сигнал
-    (r'VE(\d)(.*)', lambda m: {'fw%s' % m.group(1): m.group(2)}),
+    (r'VE(\d)(\d{2})-?\.?(\d{2})', lambda m: {'fw%s' % m.group(1): '%d.%s' % (int(m.group(2)), m.group(3))}),
+    (r'VE(\d)(.+)', lambda m: {'fw%s' % m.group(1): m.group(2)}),
     (r'MS(\d)(\d)', lambda m: {'meter_sel': int(m.group(1))}),
     (r'DA(\d{2})\d*', lambda m: {'dimmer': int(m.group(1))}),
     (r'SC0(\d)', lambda m: {'scan': int(m.group(1))}),
@@ -258,7 +259,7 @@ class Rig:
         self._set({'connected': True})
         self._task = asyncio.create_task(self._worker())
         # Начальная настройка: опознание и авто-информация
-        for c in ('ID;', 'VE0;', 'VE4;', 'AI1;'):
+        for c in ('ID;', 'VE0;', 'VE1;', 'VE2;', 'VE3;', 'VE4;', 'VE5;', 'AI1;'):
             self.send(c)
 
     def close(self):

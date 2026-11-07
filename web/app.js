@@ -110,7 +110,7 @@ function connect() {
         break;
       case 'auth_fail':
         $('#login').classList.remove('hidden'); $('#loginMsg').textContent = m.msg; break;
-      case 'state': applyState(m.s, m.full); break;
+      case 'state': applyState(m.s, m.full); if (Object.keys(m.s).some(k => /^fw\d$|^radio_id$/.test(k))) renderFw(); break;
       case 'lv': break;
       case 'bw': C.bw = m.hz; updateSpan(); break;
       case 'ptt_owner':
@@ -712,6 +712,13 @@ $('#btnAudio').onclick = async () => {
 };
 $('#volume').value = C.gain * 100;
 $('#volume').oninput = e => { C.gain = e.target.value / 100; store.set('vol', +e.target.value); C.player && C.player.port.postMessage({ gain: C.gain }); };
+
+// ------------------------------------------------------------------ прошивки трансивера
+function renderFw() {
+  const names = ['MAIN', 'DISPLAY', 'SDR', 'DSP', 'SPA-1', 'FC-80'];
+  const parts = names.map((n, i) => S['fw' + i] && S['fw' + i] !== '?' ? `${n} ${S['fw' + i]}` : '').filter(Boolean);
+  $('#fwInfo').textContent = parts.length ? 'Прошивки трансивера: ' + parts.join(' · ') : '';
+}
 
 // ------------------------------------------------------------------ микрофон и PTT
 function micErrorText(e) {
