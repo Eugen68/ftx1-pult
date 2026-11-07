@@ -7,9 +7,12 @@ import os
 import threading
 import time
 import re
+import logging
 import numpy as np
 
 from audio import SR, BLOCK, TxBuffer
+
+log = logging.getLogger('sim')
 
 
 class SimCwOp:
@@ -273,6 +276,118 @@ class SimDigi:
         return out
 
 
+class SimFt8:
+    """Участок FT8 в симуляторе (14074 и 7074 кГц): настоящие сигналы FT8 по слотам UTC
+    и станции, которые отвечают на наши передачи (наш сигнал декодируется и разбирается)."""
+    DIALS = (14074000, 7074000)
+    CQ = [('UA3ABC', 'KO85', 800, 0, 0.004), ('DL1XYZ', 'JO62', 1900, 1, 0.003),
+          ('JA1QRZ', 'PM95', 1250, 0, 0.0012), ('EW8DX', 'KO42', 2300, 1, 0.005)]
+
+    def __init__(self):
+        self.slots = {}            # k -> массив звука слота (48 кГц, от начала слота)
+        self.tx = {}               # k -> куски нашей передачи
+        self.replies = {}          # k -> [(af, amp, text)]
+        self.busy = {}             # позывной -> слот, до которого станция занята связью с нами
+        self.lock = threading.Lock()
+        self.last_k = None
+        try:
+            import _ftx, ft8
+            self._ftx, self._ft8 = _ftx, ft8
+        except Exception:
+            self._ftx = None
+
+    def _slot(self, k):
+        if k in self.slots:
+            return self.slots[k]
+        x = np.zeros(int(15 * SR), np.float32)
+        if self._ftx:
+            msgs = list(self.replies.pop(k, []))
+            for call, grid, af, par, amp in self.CQ:
+                if k % 2 == par and self.busy.get(call, -1) < k and (k // 2 + hash(call)) % 3 != 0:
+                    msgs.append((af, amp, 'CQ %s %s' % (call, grid)))
+            for af, amp, text in msgs:
+                tones = self._ftx.encode(text, False)
+                if tones is None:
+                    continue
+                y = self._ft8.gfsk(list(tones), af, 'FT8', amp=amp)
+                i = int((0.5 + 0.1 * ((af // 100) % 5)) * SR)
+                x[i:i + len(y)] += y[:len(x) - i]
+        self.slots = {kk: v for kk, v in self.slots.items() if kk >= k - 1}
+        self.slots[k] = x
+        return x
+
+    def block(self, f0, n):
+        if not any(abs(f0 - d) < 30 for d in self.DIALS):     # слышно только на стандартной частоте
+            return np.zeros(n, np.float32)
+        now = time.time()
+        k = int(now // 15)
+        self._roll(k)
+        i = int((now - k * 15) * SR)
+        x = self._slot(k)
+        out = x[i:i + n]
+        if len(out) < n:
+            out = np.concatenate([out, self._slot(k + 1)[:n - len(out)]])
+        return out
+
+    def on_tx(self, y):
+        now = time.time()
+        k = int(now // 15)
+        self._roll(k)
+        with self.lock:
+            self.tx.setdefault(k, []).append(y.copy())
+
+    def _roll(self, k):
+        if self.last_k == k:
+            return
+        prev, self.last_k = self.last_k, k
+        if prev is not None and prev in self.tx:
+            chunks = self.tx.pop(prev)
+            threading.Thread(target=self._heard, args=(prev, np.concatenate(chunks)), daemon=True).start()
+        self.tx = {kk: v for kk, v in self.tx.items() if kk >= k - 1}
+
+    def _heard(self, k, y):
+        """Декодируем свою передачу и отвечаем в следующем слоте (пока ещё не построен)."""
+        if not self._ftx or len(y) < SR * 5:
+            return
+        from audio import Decimator
+        z = Decimator(4).process(np.concatenate([np.zeros(int(0.3 * SR), np.float32), y]).astype(np.float32))
+        z = np.concatenate([z, np.zeros(max(0, 12000 * 15 - len(z)), np.float32)])
+        res = self._ftx.decode(z.astype(np.float32).tobytes(), False)
+        calls = {c[0]: c for c in self.CQ}
+        for snr, _, af, text in res:
+            w = text.split()
+            if len(w) < 2:
+                continue
+            if w[0] == 'CQ':
+                me = w[1]
+                call, grid, a, par, amp = self.CQ[3]                 # на наш CQ отвечает EW8DX
+                self._reply(k + 1, call, (a, amp, '%s %s %s' % (me, call, grid)))
+                continue
+            to, me = w[0], w[1]
+            if to not in calls:
+                continue
+            call, grid, a, par, amp = calls[to]
+            last = w[2] if len(w) > 2 else ''
+            rep = '%+03d' % int(max(-24, min(9, snr)))
+            if re.fullmatch(r'[A-R]{2}\d\d', last) and last != 'RR73':
+                txt = '%s %s %s' % (me, call, rep)
+            elif re.fullmatch(r'[+-]\d\d', last):
+                txt = '%s %s R%s' % (me, call, rep)
+            elif re.fullmatch(r'R[+-]\d\d', last):
+                txt = '%s %s RR73' % (me, call)
+            elif last == 'RR73':
+                txt = '%s %s 73' % (me, call)
+            else:
+                continue
+            log.info("SIM FT8: %s слышит «%s», ответ «%s»", call, text, txt)
+            self._reply(k + 1, call, (a, amp, txt))
+
+    def _reply(self, k, call, item):
+        self.busy[call] = k + 3
+        self.replies.setdefault(k, []).append(item)
+        self.slots.pop(k, None)
+
+
 DUMP = [] if os.environ.get('FTX_TX_DUMP') else None
 if DUMP is not None:
     import atexit
@@ -290,6 +405,7 @@ class SimAudio:
         self.n = 0
         self._stop = False
         self.digi = SimDigi()
+        self.ft8 = SimFt8()
 
     def start(self, on_rx):
         def run():
@@ -300,6 +416,8 @@ class SimAudio:
                 on_rx(x)
                 y = self.tx.pull(BLOCK)
                 self.radio.tx_level = float(np.sqrt(np.mean(y * y)))
+                if self.radio.s['TX'] != '0':
+                    self.ft8.on_tx(y)
                 if DUMP is not None and self.radio.s['TX'] != '0':          # отладка: что «ушло в эфир»
                     DUMP.append(y.copy())
                     if len(DUMP) % 50 == 0:
@@ -330,9 +448,9 @@ class SimAudio:
             return x * 0.1
         f0 = self.radio.freq()
         # «станции» на фиксированных частотах эфира: слышны, если попадают в полосу 0..3 кГц
-        stations = [(14076150, 0.01, 'ft8'), (14074800, 0.008, 'ft8'),
-                    (14075700, 0.012, 'ft8'), (14077100, 0.015, 'ssb'), (SimCwOp.FREQ, 0.012, 'op')]
+        stations = [(14077100, 0.015, 'ssb'), (SimCwOp.FREQ, 0.012, 'op')]
         x += self.digi.block(f0, t, self.n - BLOCK)
+        x += self.ft8.block(f0, BLOCK)
         cwop = self.radio.cwop
         cwop.tick()
         tm = time.monotonic() + np.arange(BLOCK) / SR

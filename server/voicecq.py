@@ -104,7 +104,7 @@ class VoiceCq:
         mode = (st.rig.state.get('mode') if st.rig else '') or ''
         if not st.rig or not st.running or not st.audio:
             return 'Связь с трансивером не запущена'
-        if st.ptt_owner is not None:
+        if st.ptt_owner is not None or st.ft.busy:
             return 'Сейчас идёт передача с микрофона'
         if st.cw.sender.busy or st.digi.tx_busy:
             return 'Идёт передача CW/RTTY'

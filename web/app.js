@@ -110,7 +110,7 @@ function connect() {
         $('#srvInfo').textContent = `Сервер v${m.version}. PTT: ${m.ptt_method}. Ограничение передачи: ${m.max_tx} с.` + (m.audio_err ? ` ЗВУК: ${m.audio_err}` : '');
         setWfMsg(m.audio_err);
         updateSpan(true);
-        send({ t: 'cw_hello' }); cwDesk.resend(); digiDesk.resend(); digi2.resend(); voiceCq.hello(); qsoRec.hello();
+        send({ t: 'cw_hello' }); cwDesk.resend(); digiDesk.resend(); digi2.resend(); ft8Desk.resend(); voiceCq.hello(); qsoRec.hello();
         if (C.audioOn) send({ t: 'audio', on: true, rate: C.rate });
         break;
       case 'auth_fail':
@@ -138,6 +138,7 @@ function connect() {
         else if (m.t && (m.t.startsWith('rt_') || m.t.startsWith('fax_'))) digiDesk.on(m);
         else if (m.t && /^(nx_|psk_|sstv_)/.test(m.t)) digi2.on(m);
         else if (m.t && m.t.startsWith('vk_')) voiceCq.on(m);
+        else if (m.t && m.t.startsWith('ft_')) ft8Desk.on(m);
         else if (m.t === 'rec_state') qsoRec.on(m);
     }
   };
@@ -600,7 +601,7 @@ function drawOverlay() {
     ctx.strokeStyle = '#3ddc84'; ctx.setLineDash([2 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath(); ctx.moveTo(X(C.cwMark), 0); ctx.lineTo(X(C.cwMark), H); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = dpr;
   }
-  for (const [hz, col] of (C.dgMarks || []).concat(C.dgMarks2 || [])) {    // RTTY mark/space, факс чёрный/белый
+  for (const [hz, col] of (C.dgMarks || []).concat(C.dgMarks2 || [], C.ftMarks || [])) {    // RTTY mark/space, факс чёрный/белый
     ctx.strokeStyle = col; ctx.setLineDash([3 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath(); ctx.moveTo(X(hz), 0); ctx.lineTo(X(hz), H); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = dpr;
   }
@@ -649,7 +650,9 @@ function tuneToAudio(a) {
   w.addEventListener('dblclick', e => tuneToAudio(aAt(e)));
   w.addEventListener('contextmenu', e => {            // правый клик — декодер CW слушает эту частоту
     e.preventDefault();
-    if (C.tab === 'digi') digiDesk.setFreq(Math.round(aAt(e))); else cwDesk.setFreq(Math.round(aAt(e)));
+    if (C.tab === 'digi') digiDesk.setFreq(Math.round(aAt(e)));
+    else if (C.tab === 'ft8') ft8Desk.setTx(aAt(e));
+    else cwDesk.setFreq(Math.round(aAt(e)));
   });
   let lastTap = 0;
   w.addEventListener('pointerup', e => {           // двойной тап на телефоне
@@ -888,6 +891,7 @@ $$('#tabs button').forEach(b => b.onclick = () => {
   $$('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + b.dataset.tab));
   if (b.dataset.tab === 'menu' && !menu.items) send({ t: 'menu_list' });
   C.tab = b.dataset.tab;
+  window.ft8Desk && ft8Desk.marks();
   store.set('tab', b.dataset.tab);
 });
 
@@ -2107,3 +2111,155 @@ const digi2 = (() => {
   return { on, onBin, resend, pick, marks, stop: () => send({ t: 'psk_stop' }) };
 })();
 window.digi2 = digi2;
+
+// ======================================================================= FT8 / FT4
+const ft8Desk = (() => {
+  const st = { on: store.get('ftOn', false), mode: 'FT8', txHz: 1500, txEnable: false, busy: false, tx: false, par: 0,
+    bands: [], clockOff: 0, rows: 0, lastSlot: '', qso: null };
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const list = $('#ftList');
+  const SLOT = () => st.mode === 'FT4' ? 7.5 : 15;
+
+  function renderOn() {
+    $('#ftOnBtn').classList.toggle('on', st.on);
+    $('#ftOnBtn').textContent = st.on ? '● Приём вкл' : '○ Приём выкл';
+  }
+  $('#ftOnBtn').onclick = () => { st.on = !st.on; store.set('ftOn', st.on); renderOn(); send({ t: 'ft_hello', on: st.on }); };
+  $$('#ftModeSw button').forEach(b => b.onclick = () => { send({ t: 'ft_mode', mode: b.dataset.v }); });
+  $('#ftBand').onchange = e => {
+    const kHz = +e.target.value; if (!kHz) return;
+    setParam('mode', 'DATA-U'); setFreq(Math.round(kHz * 1000));
+    if (!st.on) { st.on = true; store.set('ftOn', true); renderOn(); send({ t: 'ft_hello', on: true }); }
+    toast(`${st.mode}: DATA-U ${kHz} кГц`); e.target.value = '';
+  };
+  $('#ftCq').onclick = () => { if (!st.on) $('#ftOnBtn').click(); send({ t: 'ft_cq' }); };
+  $('#ftEnable').onclick = () => send({ t: 'ft_enable', on: !st.txEnable });
+  $('#ftHalt').onclick = () => send({ t: 'ft_halt' });
+  $('#ftAutoCq').onchange = e => send({ t: 'ft_auto_cq', on: e.target.checked });
+  $('#ftPar').onchange = e => send({ t: 'ft_par', par: +e.target.value });
+  $('#ftTxHz').onchange = e => setTx(+e.target.value);
+  $('#ftClear').onclick = () => { list.innerHTML = ''; st.rows = 0; };
+  $('#ftOnlyCq').onchange = e => { store.set('ftOnlyCq', e.target.checked); list.classList.toggle('only', e.target.checked); applyFilter(); };
+  $('#ftOnlyCq').checked = store.get('ftOnlyCq', false);
+  const sendText = () => { const t = $('#ftText').value.trim(); if (t) send({ t: 'ft_text', text: t }); };
+  $('#ftTextSend').onclick = sendText;
+  $('#ftText').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendText(); } });
+  const CFG = { ftCall: 'my_call', ftGrid: 'my_grid', ftPwr: 'ft_pwr', ftTries: 'ft_tries', ftLevel: 'ft_tx_level',
+    ftUdpOn: 'ft_udp_on', ftUdpHost: 'ft_udp_host', ftUdpPort: 'ft_udp_port' };
+  for (const [id, k] of Object.entries(CFG)) {
+    $('#' + id).addEventListener('change', e => {
+      const el = e.target, v = el.type === 'checkbox' ? el.checked : (el.type === 'number' || el.type === 'range') ? +el.value : el.value.trim().toUpperCase();
+      send({ t: 'ft_cfg', [k]: el.id === 'ftUdpHost' ? el.value.trim() : v });
+    });
+  }
+
+  function setTx(hz) {
+    hz = clamp(Math.round(hz), 200, 3000); st.txHz = hz; $('#ftTxHz').value = hz;
+    send({ t: 'ft_freq', tx: hz }); marks();
+  }
+  function marks() {
+    C.ftMarks = C.tab === 'ft8' ? [[st.txHz, '#ff5a4d'], [st.txHz + (st.mode === 'FT4' ? 83 : 50), '#ff5a4d']] : [];
+    drawOverlay();
+  }
+
+  // ---- часы и полоска слота
+  setInterval(() => {
+    const now = Date.now() / 1000 + st.clockOff;
+    const d = new Date(now * 1000);
+    $('#ftClock').textContent = d.toISOString().slice(11, 19) + ' UTC';
+    const s = SLOT(), k = Math.floor(now / s), frac = (now - k * s) / s;
+    $('#ftSlotBar').style.width = (frac * 100).toFixed(1) + '%';
+    $('#ftSlotBar').parentElement.classList.toggle('tx', st.tx);
+  }, 200);
+
+  // ---- список расшифровок
+  function applyFilter() {
+    const only = $('#ftOnlyCq').checked;
+    $$('#ftList .ft-row').forEach(r => r.classList.toggle('hidden', only && !r.classList.contains('cq') && !r.classList.contains('me') && !r.classList.contains('mine')));
+  }
+  function addSlot(m) {
+    $('#ftHint')?.remove();
+    const end = list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
+    const sep = document.createElement('div');
+    sep.className = 'ft-sep';
+    const hh = m.slot.slice(0, 2) + ':' + m.slot.slice(2, 4) + ':' + m.slot.slice(4, 6);
+    sep.textContent = `${hh}  ${m.mode}  · ${m.items.length ? m.items.length + ' расшифр.' : 'тишина'}${m.old ? ' (ранее)' : ''}`;
+    list.append(sep);
+    for (const it of m.items) {
+      const r = document.createElement('div');
+      r.className = 'ft-row ' + it.tags.join(' ');
+      r.innerHTML = `<span class="n">${it.snr}</span><span class="n">${it.dt.toFixed(1)}</span><span class="n">${it.f}</span><span class="tx">${esc(it.text)}</span>`;
+      r.title = 'Нажмите — позвать ' + (it.call || '');
+      r.onclick = () => {
+        if (!st.on) return;
+        if (!$('#ftCall').value) { toast('Укажите свой позывной в настройках FT8'); $('.ft-cfg').open = true; return; }
+        send({ t: 'ft_call', item: it });
+      };
+      list.append(r); st.rows++;
+    }
+    while (st.rows > 600 && list.firstChild) { if (list.firstChild.classList.contains('ft-row')) st.rows--; list.firstChild.remove(); }
+    applyFilter();
+    if (end) list.scrollTop = list.scrollHeight;
+  }
+  function addMine(text) {
+    const r = document.createElement('div');
+    r.className = 'ft-row mine';
+    r.innerHTML = `<span class="n">TX</span><span class="n"></span><span class="n">${st.txHz}</span><span class="tx">${esc(text)}</span>`;
+    list.append(r); st.rows++;
+    list.scrollTop = list.scrollHeight;
+  }
+  function addLog(q, top) {
+    const L = $('#ftLog'); L.querySelector('.muted')?.remove();
+    const d = document.createElement('div');
+    d.textContent = `${q.time}  ${q.call.padEnd(10)} ${(q.grid || '').padEnd(4)}  ${q.sent}/${q.rcvd}  ${q.band} ${q.mode}`;
+    top ? L.prepend(d) : L.prepend(d);
+  }
+
+  function render(m) {
+    st.mode = m.mode; st.txEnable = m.tx_enable; st.busy = m.busy; st.par = m.tx_par; st.bands = m.bands;
+    if (document.activeElement !== $('#ftTxHz')) { st.txHz = m.tx_hz; $('#ftTxHz').value = m.tx_hz; }
+    if (m.now) st.clockOff = m.now - Date.now() / 1000;
+    $$('#ftModeSw button').forEach(b => b.classList.toggle('on', b.dataset.v === m.mode));
+    $('#ftBand').innerHTML = '<option value="">— выбрать —</option>' + m.bands.map(b => `<option value="${b[1]}">${b[0]} — ${b[1]} кГц</option>`).join('');
+    $('#ftEnable').textContent = 'Передача: ' + (m.tx_enable ? 'вкл' : 'выкл');
+    $('#ftEnable').classList.toggle('tx-on', m.tx_enable);
+    $('#ftAutoCq').checked = m.auto_cq;
+    $('#ftPar').value = String(m.tx_par);
+    $('#ftTxMsg').textContent = m.tx_msg || '—';
+    const q = m.qso;
+    const STEP = { call: 'зовём', report: 'дали рапорт', roger: 'подтвердили (R)', rr73: 'RR73 — связь в логе', '73': '73 — связь в логе' };
+    $('#ftQso').textContent = q ? `Связь с ${q.call} ${q.grid || ''} · ${STEP[q.step] || q.step} · рапорт ${q.rst_sent || '—'} / ${q.rst_rcvd || '—'}` :
+      (m.tx_msg.startsWith('CQ') && m.tx_enable ? 'Зовём CQ…' : 'Связи нет');
+    const set = (id, v) => { const el = $('#' + id); if (document.activeElement === el) return; if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? ''; };
+    set('ftCall', m.my_call); set('ftGrid', m.my_grid); set('ftPwr', m.pwr); set('ftUdpOn', m.udp_on);
+    set('ftUdpHost', m.udp_host); set('ftUdpPort', m.udp_port);
+    if (!m.lib) $('#ftQso').textContent = 'Модуль FT8 не загружен: ' + m.lib_err;
+    marks();
+  }
+
+  function on(m) {
+    switch (m.t) {
+      case 'ft_state': render(m); break;
+      case 'ft_dec':
+        if (m.now) st.clockOff = m.now - Date.now() / 1000;
+        addSlot(m);
+        if (m.clock != null) {
+          const el = $('#ftDt'); el.textContent = 'dt ' + (m.clock >= 0 ? '+' : '') + m.clock.toFixed(2) + ' с';
+          el.style.color = Math.abs(m.clock) > 0.7 ? 'var(--tx)' : Math.abs(m.clock) > 0.4 ? 'var(--warn)' : '';
+        }
+        break;
+      case 'ft_tx':
+        st.tx = m.on;
+        $('#ftTxMsg').classList.toggle('on', m.on);
+        if (m.on) addMine(m.msg);
+        break;
+      case 'ft_qso': addLog(m.q); toast(`В лог: ${m.q.call} ${m.q.sent}/${m.q.rcvd}`, 4000); break;
+      case 'ft_log': $('#ftLog').innerHTML = m.items.length ? '' : '<span class="muted">Пока нет</span>'; m.items.forEach(q => addLog(q)); break;
+      case 'ft_note': toast(m.msg, 6000); break;
+    }
+  }
+  function resend() { renderOn(); send({ t: 'ft_hello', on: st.on }); }
+  renderOn();
+  return { on, resend, setTx, marks };
+})();
+window.ft8Desk = ft8Desk;

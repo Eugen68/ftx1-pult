@@ -44,8 +44,9 @@ from cwdesk import CwDesk  # noqa: E402
 from digidesk import DigiDesk  # noqa: E402
 from voicecq import VoiceCq  # noqa: E402
 from recorder import QsoRecorder  # noqa: E402
+from ft8 import Ft8Desk  # noqa: E402
 
-VERSION = "1.9"
+VERSION = "2.0"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -311,6 +312,7 @@ class Station:
         self.digi = DigiDesk(self, BASE)
         self.vk = VoiceCq(self, BASE)
         self.rec = QsoRecorder(BASE)
+        self.ft = Ft8Desk(self, BASE, VERSION)
         LOGBUF.listeners.append(self._on_log)
 
     def save_cfg(self):
@@ -386,6 +388,7 @@ class Station:
         self.cw.stop()
         self.digi.stop()
         self.vk.stop()
+        self.ft.stop()
         if self.rec.on:
             self.rec.stop()
             self.broadcast(self.rec_state())
@@ -436,6 +439,7 @@ class Station:
                         c.ws.send_bin(b'\x02' + struct.pack('<Hf', n, self.wf.bin_hz) + row[:n].tobytes())
         self.cw.feed(x)
         self.digi.feed(x)
+        self.ft.feed(x)
 
     def _on_rig_change(self, diff):
         self.broadcast({'t': 'state', 's': diff})
@@ -467,8 +471,8 @@ class Station:
             if self.vk.task:                             # PTT вручную — автовызов прекращаем, работаем сами
                 self.vk.stop('нажата PTT')
                 self.vk.busy = False
-            if self.digi.tx_busy or self.cw.sender.busy:
-                client.ws.send_json({'t': 'note', 'msg': 'Идёт передача RTTY/CW — дождитесь окончания'})
+            if self.digi.tx_busy or self.cw.sender.busy or self.ft.busy:
+                client.ws.send_json({'t': 'note', 'msg': 'Идёт передача RTTY/CW/FT8 — дождитесь окончания'})
                 return
             if self.ptt_owner not in (None, client):
                 client.ws.send_json({'t': 'note', 'msg': 'Передача занята другим клиентом (%s)' % self.ptt_owner.name})
@@ -661,6 +665,7 @@ class Station:
                 self.rig.remove_raw_listener(c.console)
             self.cw.client_gone(c)
             self.digi.client_gone(c)
+            self.ft.client_gone(c)
             if c.authed and not c.admin:
                 log.info("Отключился %s", c.name)
                 self.push_status()
@@ -729,6 +734,9 @@ class Station:
                 c.ws.send_json(self.rec_state())
             else:
                 self.broadcast(self.rec_state())
+            return
+        if t.startswith('ft_'):
+            await self.ft.on_msg(c, m)
             return
         if t.startswith('vk_'):
             await self.vk.on_msg(c, m)
@@ -1001,6 +1009,23 @@ def selftest(path):
     except Exception as e:
         ok = False
         rep.append('FAIL navtex/psk31: %s' % e)
+    try:                                     # FT8 / FT4: синтез -> расшифровка
+        import _ftx
+        import ft8
+        good = True
+        for mode in ('FT8', 'FT4'):
+            m = ft8.MODES[mode]
+            x = np.zeros(int(SR * m['slot']), np.float32)
+            y = ft8.gfsk(list(_ftx.encode('CQ R6AAF KN94', m['ft4'])), 1500, mode, amp=0.3)
+            x[SR // 2:SR // 2 + len(y)] = y
+            z = Decimator(4).process(x + np.random.randn(len(x)).astype(np.float32) * 0.05)
+            res = _ftx.decode(z.astype(np.float32).tobytes(), m['ft4'])
+            good &= any(r[3] == 'CQ R6AAF KN94' for r in res)
+        ok &= good
+        rep.append(('OK   ' if good else 'FAIL ') + 'ft8+ft4 loopback')
+    except Exception as e:
+        ok = False
+        rep.append('FAIL ft8: %s' % e)
     good = os.path.isfile(os.path.join(RES, 'menu_ftx1.json'))
     ok &= good
     rep.append(('OK   ' if good else 'FAIL ') + 'menu_ftx1.json')

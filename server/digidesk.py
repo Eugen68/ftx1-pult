@@ -201,7 +201,7 @@ class DigiDesk:
             return self._tx_fail(c, 'Связь с трансивером не запущена')
         if self.tx_busy:
             return self._tx_fail(c, 'Передача уже идёт')
-        if self.st.ptt_owner is not None or self.st.cw.sender.busy or self.st.vk.task:
+        if self.st.ptt_owner is not None or self.st.ft.busy or self.st.cw.sender.busy or self.st.vk.task:
             return self._tx_fail(c, 'Передатчик занят (голос или CW)')
         if not mode.startswith('DATA'):
             return self._tx_fail(c, 'Для RTTY через звук переключите трансивер в режим DATA-L или DATA-U '
@@ -223,7 +223,7 @@ class DigiDesk:
             return fail('Нечего передавать')
         if not self.st.rig or not self.st.running or not self.st.audio:
             return fail('Связь с трансивером не запущена')
-        if self.tx_busy or self.st.ptt_owner is not None or self.st.cw.sender.busy or self.st.vk.task:
+        if self.tx_busy or self.st.ptt_owner is not None or self.st.ft.busy or self.st.cw.sender.busy or self.st.vk.task:
             return fail('Передатчик занят')
         if mode != 'DATA-U':
             return fail('Для PSK31 переключите трансивер в режим DATA-U (сейчас %s)' % (mode or '?'))

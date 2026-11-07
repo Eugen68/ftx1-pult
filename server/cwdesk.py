@@ -252,7 +252,7 @@ class CwDesk:
         st = rig.state
         if not str(st.get('mode', '')).startswith('CW'):
             return fail('Передача телеграфом возможна только в режиме CW (сейчас %s)' % (st.get('mode') or '?'))
-        if self.st.ptt_owner is not None or self.st.vk.task:
+        if self.st.ptt_owner is not None or self.st.ft.busy or self.st.vk.task:
             return fail('Сейчас идёт передача голосом')
         if self.sender.busy:
             return fail('Предыдущий текст ещё передаётся')

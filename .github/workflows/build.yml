@@ -18,7 +18,11 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt setuptools
+      # FT8/FT4: модуль _ftx из ft8_lib (C, MIT) — собирается компилятором MSVC
+      - name: Модуль FT8 (_ftx)
+        working-directory: server
+        run: python setup_ftx.py build_ext --inplace
       # Загрузчик PyInstaller собираем из исходников: готовый загрузчик из pip
       # антивирусы (Microsoft Defender) часто ложно считают «Wacatac».
       - name: PyInstaller с собственным загрузчиком
@@ -30,14 +34,14 @@ jobs:
           pyinstaller --noconfirm --clean --onefile --windowed --noupx --name FTX1-Pult
           --version-file version_info.txt
           --icon web\icon.ico --add-data "web;web" --add-data "server\menu_ftx1.json;."
-          --hidden-import pystray._win32 --paths server server\main.py
+          --hidden-import pystray._win32 --hidden-import _ftx --paths server server\main.py
       - name: Вариант-папка (ZIP) — реже вызывает подозрения антивируса
         shell: pwsh
         run: |
           pyinstaller --noconfirm --onedir --windowed --noupx --name FTX1-Pult --distpath distdir `
             --version-file version_info.txt `
             --icon web\icon.ico --add-data "web;web" --add-data "server\menu_ftx1.json;." `
-            --hidden-import pystray._win32 --paths server server\main.py
+            --hidden-import pystray._win32 --hidden-import _ftx --paths server server\main.py
           Compress-Archive -Path distdir\FTX1-Pult -DestinationPath dist\FTX1-Pult-folder.zip
           (Get-FileHash dist\FTX1-Pult.exe -Algorithm SHA256).Hash + '  FTX1-Pult.exe' | Out-File dist\SHA256.txt
           (Get-FileHash dist\FTX1-Pult-folder.zip -Algorithm SHA256).Hash + '  FTX1-Pult-folder.zip' | Out-File dist\SHA256.txt -Append

@@ -12,3 +12,6 @@ fax/
 voice/
 records/
 sstv/
+*.so
+*.pyd
+ft8_log.adi
