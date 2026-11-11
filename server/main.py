@@ -46,7 +46,7 @@ from voicecq import VoiceCq  # noqa: E402
 from recorder import QsoRecorder  # noqa: E402
 from ft8 import Ft8Desk  # noqa: E402
 
-VERSION = "2.2"
+VERSION = "2.3"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -312,7 +312,7 @@ class Station:
         self.digi = DigiDesk(self, BASE)
         self.vk = VoiceCq(self, BASE)
         self.rec = QsoRecorder(BASE)
-        self.ft = Ft8Desk(self, BASE, VERSION)
+        self.ft = Ft8Desk(self, BASE, VERSION, RES)
         LOGBUF.listeners.append(self._on_log)
 
     def save_cfg(self):
@@ -1026,6 +1026,21 @@ def selftest(path):
     except Exception as e:
         ok = False
         rep.append('FAIL ft8: %s' % e)
+    try:                                     # справочник стран (если вшит при сборке)
+        import dxcc
+        cp = os.path.join(RES, 'cty.dat')
+        if os.path.isfile(cp) and os.path.getsize(cp) > 3000:
+            c = dxcc.Cty()
+            c.load(cp)
+            e = c.lookup('R6AAF')
+            good = bool(e) and 'Russia' in e['name'] and c.count > 300
+            rep.append(('OK   ' if good else 'FAIL ') + 'cty.dat: %d стран, %s' % (c.count, c.date))
+            ok &= good
+        else:
+            rep.append('--   cty.dat не вшит (скачается при запуске)')
+    except Exception as e:
+        ok = False
+        rep.append('FAIL cty.dat: %s' % e)
     good = os.path.isfile(os.path.join(RES, 'menu_ftx1.json'))
     ok &= good
     rep.append(('OK   ' if good else 'FAIL ') + 'menu_ftx1.json')

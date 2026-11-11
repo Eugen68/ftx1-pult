@@ -2180,20 +2180,62 @@ const ft8Desk = (() => {
   $('#ftClear').onclick = () => { list.innerHTML = ''; st.rows = 0; };
   
   $('#ftClear2').onclick = () => { rxList.innerHTML = ''; st.rxRows = 0; };
-  $('#ftOnlyCq').checked = store.get('ftOnlyCq', false);
-  $('#ftOnlyCq').onchange = e => { store.set('ftOnlyCq', e.target.checked); applyFilter(); };
+  $('#ftFilter').value = store.get('ftFilter', 'all');
+  $('#ftFilter').onchange = e => { store.set('ftFilter', e.target.value); applyFilter(); };
+  $('#ftAlertSnd').checked = store.get('ftAlertSnd', false);
+  $('#ftAlertSnd').onchange = e => store.set('ftAlertSnd', e.target.checked);
+  $('#ftHeardBtn').onclick = () => send({ t: 'ft_heard' });
+  $('#ftAdifClear').onclick = () => send({ t: 'ft_import_clear' });
+  $('#ftAdifFile').onchange = async e => {
+    const files = [...e.target.files]; e.target.value = '';
+    if (!files.length) return;
+    let recs = [];
+    for (const f of files) recs = recs.concat(parseAdif(await f.text()));
+    if (!recs.length) return toast('В файле не нашлось связей ADIF');
+    toast(`Загружаю ${recs.length} связей…`);
+    const N = 5000;
+    for (let i = 0; i < recs.length || i === 0; i += N)
+      send({ t: 'ft_import', recs: recs.slice(i, i + N), first: i === 0, last: i + N >= recs.length,
+        replace: $('#ftAdifReplace').checked });
+  };
+  function parseAdif(text) {               // ADIF -> [[позывной, диапазон, вид, локатор]]
+    const body = text.split(/<eoh>/i).pop(), out = [];
+    for (const rec of body.split(/<eor>/i)) {
+      const f = {}; const re = /<(\w+):(\d+)(?::\w)?>/g; let m;
+      while ((m = re.exec(rec))) { const n = +m[2]; f[m[1].toLowerCase()] = rec.substr(re.lastIndex, n); re.lastIndex += n; }
+      if (!f.call) continue;
+      let band = (f.band || '').toLowerCase();
+      if (!band && f.freq) band = bandOf(+f.freq * 1e6);
+      out.push([f.call.trim().toUpperCase(), band, (f.submode || f.mode || '').toUpperCase(), (f.gridsquare || '').slice(0, 4).toUpperCase()]);
+    }
+    return out;
+  }
+  function bandOf(hz) {
+    const B = [[1.8, 2, '160m'], [3.5, 4, '80m'], [5.3, 5.5, '60m'], [7, 7.3, '40m'], [10.1, 10.15, '30m'], [14, 14.35, '20m'],
+      [18.068, 18.168, '17m'], [21, 21.45, '15m'], [24.89, 24.99, '12m'], [28, 29.7, '10m'], [50, 54, '6m'], [70, 71, '4m'], [144, 148, '2m'], [430, 440, '70cm']];
+    const mhz = hz / 1e6; const b = B.find(x => mhz >= x[0] && mhz <= x[1]); return b ? b[2] : '';
+  }
+  function beep() {
+    try {
+      const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain();
+      o.frequency.value = 880; g.gain.value = 0.15; o.connect(g); g.connect(a.destination);
+      o.start(); o.frequency.setValueAtTime(1320, a.currentTime + 0.12); o.stop(a.currentTime + 0.3);
+      setTimeout(() => a.close(), 600);
+    } catch (e) { /* без звука */ }
+  }
   C.ftSecs = +store.get('ftWfSpeed', 20) || 0;
   $('#ftWfSpeed').value = String(C.ftSecs);
   $('#ftWfSpeed').onchange = e => { C.ftSecs = +e.target.value; store.set('ftWfSpeed', C.ftSecs); };
   $('#ftWfLab').checked = st.labOn;
   $('#ftWfLab').onchange = e => { st.labOn = e.target.checked; store.set('ftWfLab', st.labOn); marks(); };
   const CFG = { ftCall: 'my_call', ftGrid: 'my_grid', ftPwr: 'ft_pwr', ftTries: 'ft_tries', ftLevel: 'ft_tx_level',
-    ftUdpOn: 'ft_udp_on', ftUdpHost: 'ft_udp_host', ftUdpPort: 'ft_udp_port', ftWide: 'ft_wide' };
+    ftUdpOn: 'ft_udp_on', ftUdpHost: 'ft_udp_host', ftUdpPort: 'ft_udp_port', ftWide: 'ft_wide',
+    ftPskOn: 'psk_on', ftPskAnt: 'psk_antenna', ftAlertDx: 'ft_alert_dxcc' };
   for (const [id, k] of Object.entries(CFG)) {
     $('#' + id).addEventListener('change', e => {
       const el = e.target;
       const v = el.type === 'checkbox' ? el.checked : (el.type === 'number' || el.type === 'range') ? +el.value
-        : id === 'ftUdpHost' ? el.value.trim() : el.value.trim().toUpperCase();
+        : (id === 'ftUdpHost' || id === 'ftPskAnt') ? el.value.trim() : el.value.trim().toUpperCase();
       send({ t: 'ft_cfg', [k]: v });
     });
   }
@@ -2310,7 +2352,8 @@ const ft8Desk = (() => {
       let dy = 4;                          // подпись чуть выше линии начала периода, без наложений
       while (used.some(u => Math.abs(u[0] - it.f) < 160 && u[1] === dy)) dy += 12;
       used.push([it.f, dy]);
-      const col = it.tags.includes('me') ? '#ff6b6b' : it.tags.includes('cq') ? '#7dffa8' : '#ffffff';
+      const col = it.tags.includes('me') ? '#ff6b6b' : it.tags.includes('newdxcc') ? '#ff7bff' : it.tags.includes('newband') ? '#ffb347'
+        : it.tags.includes('cq') ? '#7dffa8' : '#ffffff';
       labs.push({ row: r0, hz: it.f, text: it.call, col, dy });
     }
     labs.sort((a, b) => a.row - b.row);
@@ -2320,14 +2363,20 @@ const ft8Desk = (() => {
   // ---------------------------------------------------------------- списки расшифровок
   const nearRx = it => Math.abs(it.f - st.rxHz) <= BW() + 10;
   function applyFilter() {
-    const only = $('#ftOnlyCq').checked;
-    $$('#ftList .ft-row').forEach(r => r.classList.toggle('hidden', only && !r.classList.contains('cq') && !r.classList.contains('me')));
+    const f = $('#ftFilter').value, has = (r, ...c) => c.some(x => r.classList.contains(x));
+    $$('#ftList .ft-row').forEach(r => r.classList.toggle('hidden',
+      f === 'cq' ? !has(r, 'cq', 'me') : f === 'new' ? !has(r, 'me', 'newdxcc', 'newband', 'newcall') : false));
   }
   function row(it, utc, extra = '') {
     const r = document.createElement('div');
     r.className = 'ft-row ' + it.tags.join(' ') + extra;
-    r.innerHTML = `<span>${utc}</span><span class="n">${it.snr}</span><span class="n">${it.dt.toFixed(1)}</span><span class="n">${it.f}</span><span class="tx">${esc(it.text)}</span>`;
-    r.title = it.call ? 'Нажмите — позвать ' + it.call : '';
+    const badge = it.tags.includes('newdxcc') ? '<b class="bd bd-dx" title="Новая страна">страна</b>'
+      : it.tags.includes('newband') ? '<b class="bd bd-band" title="Страна не сработана на этом диапазоне">диап.</b>' : it.tags.includes('newcall') ? '<b class="bd bd-call" title="С этим позывным связи не было">нов.</b>' : '';
+    r.innerHTML = `<span>${utc}</span><span class="n">${it.snr}</span><span class="n">${it.dt.toFixed(1)}</span><span class="n">${it.f}</span>` +
+      `<span class="tx"><span class="msg">${esc(it.text)}</span>${badge}<span class="cty">${esc(it.country || '')}</span></span>`;
+    r.title = (it.call ? 'Нажмите — позвать ' + it.call : '') + (it.country ? `\n${it.country}${it.cont ? ' (' + it.cont + ')' : ''}` : '') +
+      (it.km != null ? `, ${it.km} км` : '') + (it.tags.includes('worked') ? '\nУже работали на этом диапазоне' : '') +
+      (it.tags.includes('newgrid') ? '\nНовый квадрат' : '');
     r.onclick = () => {
       if (!st.myCall) { toast('Укажите свой позывной в настройках FT8'); $('.ft-cfg').open = true; return; }
       turnOn(); setRx(it.f); send({ t: 'ft_call', item: it });
@@ -2408,6 +2457,14 @@ const ft8Desk = (() => {
     set('ftCall', m.my_call); set('ftGrid', m.my_grid); set('ftPwr', m.pwr); set('ftUdpOn', m.udp_on);
     set('ftUdpHost', m.udp_host); set('ftUdpPort', m.udp_port); set('ftWide', m.wide);
     if (!m.lib) $('#ftQso').textContent = 'Модуль FT8 не загружен: ' + m.lib_err;
+    set('ftPskOn', m.psk_on); set('ftPskAnt', m.psk_antenna); set('ftAlertDx', m.alert_dxcc);
+    const w = m.worked || {};
+    $('#ftWorkedInfo').textContent = `${w.dxcc ?? 0} стран, ${w.calls ?? 0} позывных, ${w.qso ?? 0} связей` +
+      (w.imported ? ` (из загруженного лога ${w.imported})` : ' — загрузите свой журнал, иначе «новыми» считаются все');
+    $('#ftCtyInfo').textContent = m.cty && m.cty.n ? `Справочник стран cty.dat: ${m.cty.n} стран, версия ${m.cty.date}`
+      : 'Справочник стран cty.dat не найден — страны не определяются (программа скачает его сама при доступе в интернет)';
+    if (st.myCall) $('#ftHeardMap').href = `https://pskreporter.info/pskmap.html?preset&callsign=${encodeURIComponent(st.myCall)}&timerange=1800&txrx=tx`;
+    $('#ftHeardInfo').textContent = m.psk_on ? `PSK Reporter, 30 мин · отправлено ${m.psk_sent}` : 'PSK Reporter выключен';
     renderCur(); marks();
   }
 
@@ -2431,6 +2488,20 @@ const ft8Desk = (() => {
       case 'ft_qso': addLog(m.q); toast(`В лог: ${m.q.call} ${m.q.sent}/${m.q.rcvd}`, 4000); break;
       case 'ft_log': $('#ftLog').innerHTML = m.items.length ? '' : '<span class="muted">Пока нет</span>'; m.items.forEach(addLog); break;
       case 'ft_note': toast(m.msg, 6000); break;
+      case 'ft_alert':
+        toast(`★ Новая страна: ${m.country} — ${m.call} (${m.f} Гц)`, 8000);
+        if ($('#ftAlertSnd').checked) beep();
+        break;
+      case 'ft_heard': {
+        const H = $('#ftHeard');
+        if (m.err && !m.items.length) { H.innerHTML = `<span class="muted">PSK Reporter не ответил: ${esc(m.err)}</span>`; break; }
+        if (!m.items.length) { H.innerHTML = '<span class="muted">За 30 минут вас никто не отметил</span>'; break; }
+        const ago = t => { const s = Math.max(0, Date.now() / 1000 - t); return s < 3600 ? Math.round(s / 60) + ' мин' : Math.round(s / 3600) + ' ч'; };
+        H.innerHTML = `<div class="muted">${m.n} станций, дальше всех — ${esc(m.items[0].call)} ${m.items[0].km ?? '?'} км</div>` +
+          m.items.map(r => `<div title="${esc(r.country || '')}">${esc(r.call.padEnd(10))} ${esc((r.grid || '').slice(0, 4).padEnd(4))} ` +
+            `${String(r.km ?? '').padStart(5)} км ${r.snr != null ? String(r.snr).padStart(3) + ' дБ' : '      '} ${esc(r.band)} · ${ago(r.t)} назад</div>`).join('');
+        break;
+      }
     }
   }
   function resend() { renderOn(); send({ t: 'ft_hello', on: st.on }); send({ t: 'ft_freq', rx: st.rxHz }); }

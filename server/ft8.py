@@ -23,6 +23,8 @@ import time
 import numpy as np
 
 from audio import Decimator, SR
+import dxcc
+from pskreporter import PskReporter
 
 log = logging.getLogger("ft8")
 
@@ -146,8 +148,9 @@ def adif_record(q):
 
 # ---------------------------------------------------------------------- стол FT8
 class Ft8Desk:
-    def __init__(self, station, base_dir, version='1.0'):
+    def __init__(self, station, base_dir, version='1.0', res_dir=None):
         self.st = station
+        self.base = base_dir
         self.version = version
         self.adif_path = os.path.join(base_dir, 'ft8_log.adi')
         self.dec = Decimator(4)                 # 48 -> 12 кГц
@@ -166,7 +169,6 @@ class Ft8Desk:
         self.task = None
         self.decodes = []                       # последние декоды (для нового подключения)
         self.qsos = []                          # лог текущего сеанса
-        self.worked = set()
         self.last_slot = None
         self.tx_slot = None
         self.dts = []
@@ -176,7 +178,35 @@ class Ft8Desk:
         self.auto_seq = True                    # автоматика связи (Auto Seq в JTDX/MSHV)
         self.tune = None                        # задача «Настройка» (несущая для тюнера/ALC)
         self._wide = None                       # момент, когда увидели DATA-U (для расширения полосы)
-        self._load_worked()
+        # страны (cty.dat), сработанное, PSK Reporter
+        self.cty = dxcc.Cty()
+        self._load_cty(res_dir or base_dir)
+        dxcc.update_cty(base_dir, on_done=lambda p: self._reload_cty(p))
+        self.wk = dxcc.Worked(base_dir, self.cty)
+        self.psk = PskReporter(station.cfg, version)
+        self.alerted = {}                       # позывной -> время оповещения о новой стране
+        self.last_tx_t = 0
+        self.loop = None
+        self._imp = []                          # приём загружаемого лога по частям
+
+    def _load_cty(self, res_dir):
+        p = dxcc.find_cty(self.base, res_dir)
+        self.res_dir = res_dir
+        if not p:
+            log.warning("cty.dat не найден — страны не определяются")
+            return
+        try:
+            self.cty.load(p)
+        except Exception as e:
+            log.warning("cty.dat (%s): %s", p, e)
+
+    def _reload_cty(self, path):
+        def go():
+            self._load_cty(self.res_dir)
+            self.wk.rebuild()
+            self.bc(self.state())
+        if self.loop:
+            self.loop.call_soon_threadsafe(go)
 
     # ------------------------------------------------------------------ настройки
     @property
@@ -206,7 +236,12 @@ class Ft8Desk:
                 'bands': BANDS[self.mode], 'my_call': self.my_call(), 'my_grid': self.my_grid(),
                 'udp_host': self.cfg.get('ft_udp_host', '127.0.0.1'), 'udp_port': self.cfg.get('ft_udp_port', 2237),
                 'udp_on': self.cfg.get('ft_udp_on', True), 'pwr': self.cfg.get('ft_pwr', ''),
-                'lib': _ftx is not None, 'lib_err': '' if _ftx else _ftx_err, 'now': time.time()}
+                'lib': _ftx is not None, 'lib_err': '' if _ftx else _ftx_err, 'now': time.time(),
+                'psk_on': self.psk.on, 'psk_antenna': self.cfg.get('psk_antenna', ''), 'psk_sent': self.psk.n_sent,
+                'psk_queue': len(self.psk.queue), 'alert_dxcc': self.cfg.get('ft_alert_dxcc', True),
+                'cty': {'n': self.cty.count, 'date': self.cty.date, 'src': os.path.basename(os.path.dirname(self.cty.path))
+                        if self.cty.path else ''},
+                'worked': self.wk.stats()}
 
     def update(self):
         on = bool(self._clients()) or self.tx_enable
@@ -245,6 +280,7 @@ class Ft8Desk:
 
     # ------------------------------------------------------------------ главный цикл по слотам
     async def _loop(self):
+        self.loop = asyncio.get_running_loop()
         try:
             while self.enabled:
                 m = MODES[self.mode]
@@ -264,7 +300,11 @@ class Ft8Desk:
                         asyncio.create_task(self._transmit(t_s, self.tx_msg))
                 # 3) полоса DATA-U: по умолчанию у трансивера 500 Гц — для FT8 нужна 3000 Гц
                 self._check_width(now)
-                # 4) сердцебиение для агента лога
+                # 4) PSK Reporter: пачка принятых раз в ~5 мин; «где меня слышат» — пока передаём
+                self.psk.tick(self.my_call(), self.my_grid())
+                if self.psk.on and now - self.last_tx_t < 1800 and now - self.last_tx_t > 60:
+                    self.psk.query_heard(self.my_call(), self._heard_done)
+                # 5) сердцебиение для агента лога
                 if now - self.hb_t > 15 and self.cfg.get('ft_udp_on', True):
                     self.hb_t = now
                     self.udp.heartbeat(self.cfg.get('ft_udp_host', '127.0.0.1'), self.cfg.get('ft_udp_port', 2237),
@@ -309,6 +349,10 @@ class Ft8Desk:
             return
         slot = time.strftime('%H%M%S', time.gmtime(t0))
         mc = self.my_call()
+        dial = (self.st.rig.state.get('freq_a') if self.st.rig else 0) or 0
+        band = dxcc.band_of(dial)
+        me_ll = dxcc.grid_latlon(self.my_grid())
+        alerts = []
         items = []
         for snr, dts, f, text in res:
             dtv = dts - m['dt0']             # как в WSJT-X: 0 — начало передачи в 0,5 с слота
@@ -320,14 +364,33 @@ class Ft8Desk:
             if mc and mc in w:
                 tags.append('me')
             call = self._dx_of(w)
-            if call and call in self.worked:
-                tags.append('worked')
-            items.append({'snr': round(snr), 'dt': round(dtv, 1), 'f': round(f), 'text': text, 'tags': tags,
-                          'par': k % 2, 'call': call})
+            grid = w[-1] if len(w) >= 3 and re.fullmatch(GRID_RE, w[-1]) and w[-1] != 'RR73' else ''
+            item = {'snr': round(snr), 'dt': round(dtv, 1), 'f': round(f), 'text': text, 'tags': tags,
+                    'par': k % 2, 'call': call}
+            if call and '<' not in call and call != mc:
+                st_tags, ent = self.wk.status(call, band, grid)
+                tags += st_tags
+                if ent:
+                    item['country'] = ent['name']
+                    item['cont'] = ent['cont']
+                ll = dxcc.grid_latlon(grid) or ((ent['lat'], ent['lon']) if ent else None)
+                d = dxcc.distance_km(me_ll, ll)
+                if d is not None:
+                    item['km'] = int(round(d))
+                if dial and re.fullmatch(CALL_RE, call):
+                    self.psk.add(call, dial + f, snr, self.mode, grid, band)
+                if 'newdxcc' in st_tags and self.cfg.get('ft_alert_dxcc', True) \
+                        and time.time() - self.alerted.get(call, 0) > 900:
+                    self.alerted[call] = time.time()
+                    alerts.append({'call': call, 'country': ent['name'] if ent else '', 'text': text, 'f': round(f),
+                                   'kind': 'newdxcc'})
+            items.append(item)
         items.sort(key=lambda i: i['f'])
         self.decodes = (self.decodes + [{'slot': slot, 'items': items}])[-12:]
         self.bc({'t': 'ft_dec', 'slot': slot, 'par': k % 2, 'items': items, 'mode': self.mode, 'now': time.time(), 't0': t0,
                  'clock': round(float(np.median(self.dts)), 2) if self.dts else None})
+        for a in alerts:
+            self.bc(dict(a, t='ft_alert'))
         self._sequence(items, k)
 
     @staticmethod
@@ -399,7 +462,11 @@ class Ft8Desk:
                 return
         elif to_me and self.tx_msg.startswith('CQ'):
             # на наш CQ ответили — берём первого (как MSHV: самого громкого)
-            i = sorted(to_me, key=lambda x: (abs(x['f'] - self.rx_hz) > 100, -x['snr']))[0]
+            # кому отвечаем первым: новая страна, новая на диапазоне, новый позывной, потом своя частота RX и громкость
+            def prio(x):
+                t = x['tags']
+                return ('newdxcc' not in t, 'newband' not in t, 'newcall' not in t, abs(x['f'] - self.rx_hz) > 100, -x['snr'])
+            i = sorted(to_me, key=prio)[0]
             w = i['text'].split()
             dx = w[1] if len(w) > 1 else ''
             grid = w[2] if len(w) > 2 and re.fullmatch(GRID_RE, w[2]) else ''
@@ -487,20 +554,27 @@ class Ft8Desk:
             host, port = self.cfg.get('ft_udp_host', '127.0.0.1'), self.cfg.get('ft_udp_port', 2237)
             self.udp.qso_logged(host, port, rec)
             self.udp.logged_adif(host, port, adif)
-        self.worked.add(q['call'])
+        self.wk.add(q['call'], band_of(rec['freq']), rec['grid'])
         item = {'time': rec['off'].strftime('%H:%M'), 'call': rec['call'], 'grid': rec['grid'],
                 'sent': rec['rst_sent'], 'rcvd': rec['rst_rcvd'], 'band': band_of(rec['freq']), 'mode': self.mode}
         self.qsos = (self.qsos + [item])[-100:]
         log.info("FT8 QSO: %s %s %s/%s %s", rec['call'], rec['grid'], rec['rst_sent'], rec['rst_rcvd'], self.mode)
         self.bc({'t': 'ft_qso', 'q': item})
 
-    def _load_worked(self):
-        try:
-            with open(self.adif_path, encoding='utf-8') as f:
-                for m in re.finditer(r'<call:\d+>([A-Z0-9/]+)', f.read(), re.I):
-                    self.worked.add(m.group(1).upper())
-        except OSError:
-            pass
+    def _heard_done(self):
+        def go():
+            me_ll = dxcc.grid_latlon(self.my_grid())
+            out = []
+            for r in self.psk.heard:
+                d = dxcc.distance_km(me_ll, dxcc.grid_latlon(r['grid']))
+                ent = self.cty.lookup(r['call'])
+                out.append(dict(r, km=int(round(d)) if d is not None else None,
+                                country=ent['name'] if ent else r.get('country', ''), band=dxcc.band_of(r['freq'])))
+            out.sort(key=lambda r: -(r['km'] or 0))
+            self.heard = out
+            self.bc({'t': 'ft_heard', 'items': out[:200], 'n': len(out), 'err': self.psk.heard_err, 'at': time.time()})
+        if self.loop:
+            self.loop.call_soon_threadsafe(go)
 
     # ------------------------------------------------------------------ передача
     def _why_not(self):
@@ -535,6 +609,7 @@ class Ft8Desk:
             x = x[skip:]
             start = time.time() + 0.2
         self.busy = True
+        self.last_tx_t = time.time()
         self.bc({'t': 'ft_tx', 'on': True, 'msg': msg, 'slot': time.strftime('%H%M%S', time.gmtime(t_slot))})
         try:
             tx.clear()
@@ -652,6 +727,26 @@ class Ft8Desk:
             self._set_tx('')
         elif t == 'ft_enable':
             self.tx_enable = bool(m.get('on'))
+        elif t == 'ft_heard':
+            if not self.psk.query_heard(self.my_call(), self._heard_done) and getattr(self, 'heard', None) is not None:
+                c.ws.send_json({'t': 'ft_heard', 'items': self.heard[:200], 'n': len(self.heard),
+                                'err': self.psk.heard_err, 'at': self.psk.heard_t, 'cached': True})
+            return
+        elif t == 'ft_import':
+            if m.get('first'):
+                self._imp = []
+            self._imp += [{'call': r[0], 'band': r[1], 'mode': r[2], 'grid': r[3]} for r in (m.get('recs') or [])
+                          if isinstance(r, list) and len(r) >= 4][:200000]
+            if m.get('last'):
+                total, new = await asyncio.to_thread(self.wk.import_recs, self._imp, bool(m.get('replace')))
+                self._imp = []
+                c.ws.send_json({'t': 'ft_note', 'msg': 'Лог загружен: %d связей, новых %d. Сработано стран: %d, позывных: %d'
+                                % (total, new, self.wk.stats()['dxcc'], self.wk.stats()['calls'])})
+            else:
+                return
+        elif t == 'ft_import_clear':
+            self.wk.clear_import()
+            c.ws.send_json({'t': 'ft_note', 'msg': 'Загруженные логи удалены — остался только лог FT8 пульта'})
         elif t == 'ft_auto_seq':
             self.auto_seq = bool(m.get('on'))
         elif t == 'ft_dx':
@@ -686,7 +781,8 @@ class Ft8Desk:
                 self._set_tx(txt)
                 self.tx_enable = True
         elif t == 'ft_cfg':
-            for k in ('my_grid', 'ft_pwr', 'ft_udp_host', 'ft_udp_port', 'ft_udp_on', 'ft_tries', 'ft_tx_level', 'ft_wide'):
+            for k in ('my_grid', 'ft_pwr', 'ft_udp_host', 'ft_udp_port', 'ft_udp_on', 'ft_tries', 'ft_tx_level', 'ft_wide',
+                      'psk_on', 'psk_antenna', 'ft_alert_dxcc'):
                 if k in m:
                     v = m[k]
                     if k == 'ft_udp_port':

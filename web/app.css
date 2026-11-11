@@ -475,3 +475,32 @@ body.fit.tab-ft8:not(.wide) .layout { grid-template-rows: minmax(0, 1fr) minmax(
   body.fit #tab-ft8 .ft-list { flex: 1; height: auto; min-height: 100px; }
   body.fit #tab-ft8 .ft-side { min-height: 0; overflow-y: auto; scrollbar-width: thin; padding-right: 2px; }
 }
+
+/* FT8: новые страны / диапазоны / позывные (как в JTAlert) */
+.ft-row .tx { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.ft-row .tx .msg { overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.ft-row .bd { width: 9px; height: 9px; padding: 0; border-radius: 50%; font-size: 0; overflow: hidden; color: transparent; }
+@container (min-width: 520px) { .ft-row .bd { width: auto; height: auto; padding: 0 5px; border-radius: 3px; font-size: 10px; color: #fff; } }
+.ft-row .tx .cty { margin-left: auto; color: #8aa0b5; font-size: 11px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ft-row.cq .tx .cty { color: #9cc9aa; }
+.ft-row .bd { font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 3px; flex: none; line-height: 1.5; }
+.bd-dx { background: #c040d8; color: #fff; }
+.bd-band { background: #d9822b; color: #fff; }
+.bd-call { background: #1f6f8b; color: #dff6ff; }
+.ft-row.newdxcc { box-shadow: inset 4px 0 0 #e25cff; }
+.ft-row.newdxcc .tx .cty { color: #ff9cff; font-weight: 600; }
+.ft-row.newband { box-shadow: inset 4px 0 0 #ffa040; }
+.ft-row.newcall { box-shadow: inset 3px 0 0 #36c5f0; }
+.ft-row.worked:not(.me) { opacity: .55; }
+.ft-legend { display: inline-flex; gap: 6px; }
+.ft-legend i { font-style: normal; padding: 0 5px; border-radius: 3px; font-size: 10px; color: #fff; }
+.ft-legend .lg-dx { background: #c040d8; } .ft-legend .lg-band { background: #d9822b; } .ft-legend .lg-call { background: #1f6f8b; }
+#ftFilter { width: auto; min-width: 0; min-height: 0; height: 26px; padding: 0 20px 0 6px; font-size: 12px; }
+.ft-pane { container-type: inline-size; min-width: 0; }
+@container (max-width: 470px) { .ft-row .tx .cty { display: none; } }
+.ft-heard { margin-top: 6px; }
+.ft-heard .ft-log { max-height: 180px; }
+.ft-worked { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+.ft-worked .btn-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ft-file { cursor: pointer; }
+@media (max-width: 520px) { .ft-legend { display: none; } }

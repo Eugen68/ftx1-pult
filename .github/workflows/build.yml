@@ -23,6 +23,13 @@ jobs:
       - name: Модуль FT8 (_ftx)
         working-directory: server
         run: python setup_ftx.py build_ext --inplace
+      # Справочник стран для FT8 (Country Files, AD1C). Не скачался — программа скачает сама при запуске.
+      - name: cty.dat
+        shell: pwsh
+        run: |
+          try { Invoke-WebRequest https://www.country-files.com/cty/cty.dat -OutFile server\cty.dat -TimeoutSec 60 }
+          catch { Write-Host "cty.dat не скачан: $_"; Set-Content server\cty.dat '' }
+          (Get-Item server\cty.dat).Length
       # Загрузчик PyInstaller собираем из исходников: готовый загрузчик из pip
       # антивирусы (Microsoft Defender) часто ложно считают «Wacatac».
       - name: PyInstaller с собственным загрузчиком
@@ -33,14 +40,14 @@ jobs:
       - run: >
           pyinstaller --noconfirm --clean --onefile --windowed --noupx --name FTX1-Pult
           --version-file version_info.txt
-          --icon web\icon.ico --add-data "web;web" --add-data "server\menu_ftx1.json;."
+          --icon web\icon.ico --add-data "web;web" --add-data "server\menu_ftx1.json;." --add-data "server\cty.dat;."
           --hidden-import pystray._win32 --hidden-import _ftx --paths server server\main.py
       - name: Вариант-папка (ZIP) — реже вызывает подозрения антивируса
         shell: pwsh
         run: |
           pyinstaller --noconfirm --onedir --windowed --noupx --name FTX1-Pult --distpath distdir `
             --version-file version_info.txt `
-            --icon web\icon.ico --add-data "web;web" --add-data "server\menu_ftx1.json;." `
+            --icon web\icon.ico --add-data "web;web" --add-data "server\menu_ftx1.json;." --add-data "server\cty.dat;." `
             --hidden-import pystray._win32 --hidden-import _ftx --paths server server\main.py
           Compress-Archive -Path distdir\FTX1-Pult -DestinationPath dist\FTX1-Pult-folder.zip
           (Get-FileHash dist\FTX1-Pult.exe -Algorithm SHA256).Hash + '  FTX1-Pult.exe' | Out-File dist\SHA256.txt

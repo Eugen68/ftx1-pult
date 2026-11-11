@@ -460,7 +460,9 @@
       <div class="ft-panes">
         <div class="ft-pane">
           <div class="ft-head"><b title="Активность диапазона">Активность</b>
-            <label class="chk mini"><input type="checkbox" id="ftOnlyCq"> только CQ и мне</label>
+            <select id="ftFilter" class="mini-sel" title="Что показывать. Цветные метки: фиолетовая — новая страна, оранжевая — страна не на этом диапазоне, голубая — новый позывной; бледные строки — уже работали">
+              <option value="all">все</option><option value="cq">CQ и мне</option><option value="new">новые и мне</option></select>
+
             <span class="spacer"></span><button class="btn small" id="ftClear">Очистить</button></div>
           <div class="ft-th mono"><span>UTC</span><span>дБ</span><span>DT</span><span>Част</span><span>Сообщение</span></div>
           <div class="ft-list mono" id="ftList"><div class="muted ft-hint" id="ftHint">Включите приём и выберите диапазон — трансивер встанет в DATA-U на частоту FT8, полоса 3000 Гц.
@@ -502,6 +504,13 @@
           <h4>Связи <span class="muted small" id="ftLogInfo"></span></h4>
           <div class="ft-log mono small" id="ftLog"><span class="muted">Пока нет</span></div>
         </div>
+        <div class="ft-heard">
+          <div class="ft-head"><b>Меня слышат</b> <span class="muted small" id="ftHeardInfo">PSK Reporter, 30 мин</span>
+            <span class="spacer"></span>
+            <a class="btn small" id="ftHeardMap" target="_blank" rel="noopener" title="Карта на pskreporter.info">Карта</a>
+            <button class="btn small" id="ftHeardBtn" title="Обновить (не чаще раза в 5 минут)">Обновить</button></div>
+          <div class="ft-log mono small" id="ftHeard"><span class="muted">После первых передач здесь появятся станции, которые вас приняли</span></div>
+        </div>
         <details class="ft-cfg">
           <summary>Настройки FT8 и лог</summary>
           <div class="ft-cfg-grid">
@@ -515,6 +524,21 @@
             <label class="chk mini"><input type="checkbox" id="ftUdpOn" checked> отправлять в лог (UDP, как WSJT-X)</label>
             <label class="mini">Адрес<input id="ftUdpHost" class="text mono" value="127.0.0.1"></label>
             <label class="mini">Порт<input id="ftUdpPort" type="number" class="num" value="2237"></label>
+            <label class="chk mini"><input type="checkbox" id="ftPskOn" checked> отправлять принятые станции в PSK Reporter</label>
+            <label class="mini" style="grid-column: 1 / -1">Антенна (для PSK Reporter)<input id="ftPskAnt" class="text" maxlength="60" placeholder="например: EFHW 20 м, 1:64"></label>
+            <label class="chk mini"><input type="checkbox" id="ftAlertDx" checked> оповещать о новой стране</label>
+            <label class="chk mini"><input type="checkbox" id="ftAlertSnd"> со звуком</label>
+          </div>
+          <div class="ft-worked">
+            <b>Сработанное</b> <span class="muted small" id="ftWorkedInfo">—</span>
+            <p class="muted small">Чтобы подсветка «новая страна / новый позывной» учитывала весь ваш журнал, загрузите его экспорт в ADIF
+              (в HAMLOG: экспорт журнала в ADIF). Связи, проведённые в пульте, добавляются сами.</p>
+            <div class="btn-row">
+              <label class="btn small ft-file">Загрузить ADIF…<input type="file" id="ftAdifFile" accept=".adi,.adif,.txt" multiple hidden></label>
+              <label class="chk mini"><input type="checkbox" id="ftAdifReplace"> заменить ранее загруженное</label>
+              <button class="btn small" id="ftAdifClear">Удалить загруженное</button>
+            </div>
+            <div class="muted small" id="ftCtyInfo"></div>
           </div>
           <p class="muted small">Каждая связь пишется в файл <span class="mono">ft8_log.adi</span> рядом с программой и отправляется по UDP в формате WSJT-X —
             его принимают HAMLOG-агент, Log4OM, JTAlert, GridTracker. Часы ПК должны быть точными (±0,5 с).</p>
