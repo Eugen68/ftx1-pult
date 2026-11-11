@@ -226,7 +226,7 @@ class SerialPtt:
 # --------------------------------------------------------------------- Rig
 FAST_RX = ['SM0;', 'RI0;']
 FAST_TX = ['RM5;', 'RM6;', 'RM4;', 'RM3;']
-MEDIUM = ['FA;', 'FB;', 'MD0;', 'TX;']
+MEDIUM = ['FA;', 'FB;', 'MD0;', 'MD1;', 'VS;', 'ST;', 'TX;']
 SLOW = ['VM0;', 'MC0;', 'MD1;', 'AG0;', 'RG0;', 'SQ0;', 'PC;', 'MG;', 'VX;', 'VG;', 'VD;', 'NL0;', 'RL0;',
         'BC0;', 'BP00;', 'BP01;', 'CO00;', 'CO01;', 'CO02;', 'CO03;', 'IS0;', 'SH0;',
         'GT0;', 'PA{band};', 'RA0;', 'NA0;', 'FT;', 'ST;', 'VS;', 'FR;', 'PR0;', 'PL;', 'ML0;',

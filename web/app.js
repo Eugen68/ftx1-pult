@@ -55,7 +55,12 @@ function widthHz(code, mode) {
 }
 
 // ------------------------------------------------------------------ состояние
-const S = {};                       // состояние трансивера (зеркало сервера)
+const S = {};                       // состояние трансивера (зеркало сервера) — «как на экране»
+// Если на трансивере выбран SUB (VS1), большая частота пульта — частота SUB, а маленькая — MAIN,
+// как на экране FTX-1. R — сырое состояние, S — вид: freq_a/mode всегда «рабочий» приёмник.
+const R = {};
+const PAIR = { freq_a: 'freq_b', freq_b: 'freq_a', mode: 'mode_b', mode_b: 'mode' };
+const rawKey = k => (R.vfo && PAIR[k]) ? PAIR[k] : k;     // ключ вида -> ключ трансивера (и обратно)
 const C = {                         // состояние клиента
   ws: null, authed: false, local: false, info: {},
   rate: store.get('rate', 0), pw: store.get('pw', ''),          // 0 = выбрать по месту (ПК — 48 кГц, сеть — 16 кГц)
@@ -75,9 +80,17 @@ if ((opts.v | 0) < 2) {           // 1.8: обработка браузера д
 // ------------------------------------------------------------------ связь
 function send(o) { if (C.ws && C.ws.readyState === 1) C.ws.send(JSON.stringify(o)); }
 function setParam(k, v) {
+  const rk = rawKey(k);
   C.lockUntil[k] = performance.now() + 1200;
-  S[k] = v;
-  send({ t: 'set', k, v });
+  if (k === 'vfo') { const was = !!R.vfo; R.vfo = v; if (!!v !== was) remapVfo(); }
+  else { S[k] = v; R[rk] = v; }
+  send({ t: 'set', k: rk, v });
+}
+function remapVfo() {                     // MAIN/SUB переключили — частоты и виды меняются местами
+  for (const k of Object.keys(PAIR)) { S[k] = R[rawKey(k)]; delete C.lockUntil[k]; }
+  S.vfo = R.vfo;
+  if (typeof renderFreq === 'function') { renderFreq(); renderBadges(); }
+  if (typeof updateSpan === 'function') setTimeout(() => { updateSpan(); drawOverlay(); }, 0);
 }
 function act(a, arg) { send({ t: 'act', a, arg }); }
 
@@ -177,9 +190,13 @@ function setLink(ok, text) {
 // ------------------------------------------------------------------ отрисовка состояния
 function applyState(d, full) {
   const now = performance.now();
+  const swapWas = !!R.vfo;
+  for (const [k, v] of Object.entries(d)) R[k] = v;
+  if (!!R.vfo !== swapWas) remapVfo();
   for (const [k, v] of Object.entries(d)) {
-    if (!full && C.lockUntil[k] > now) continue;   // пользователь только что крутил — не дёргаем
-    S[k] = v;
+    const vk = rawKey(k);                          // для freq/mode ключ вида
+    if (!full && C.lockUntil[vk] > now) continue;  // пользователь только что крутил — не дёргаем
+    S[vk] = v;
   }
   if ('connected' in d || 'radio_id' in d || 'fw0' in d || 'pwr_head' in d) {
     const head = S.pwr_head === 2 ? 'Optima/SPA-1' : (S.pwr_head === 1 ? 'Field' : '');
@@ -210,6 +227,8 @@ function renderBadges() {
   $('#bTx').classList.toggle('off', !S.tx);
   $('#bBusy').classList.toggle('off', !S.busy);
   $('#freqB').textContent = S.freq_b ? fmtFreq(S.freq_b) : '—';
+  $('#lblB').textContent = R.vfo ? 'A:' : 'B:';
+  $('#bTxB').classList.toggle('hidden', !S.split);
   $('#btnSplit').classList.toggle('on', !!S.split);
   $('#btnLock').classList.toggle('on', !!S.lock);
   $$('#modes .btn').forEach(b => b.classList.toggle('on', b.dataset.m === S.mode));
@@ -258,7 +277,7 @@ function renderMeters() {
 let freqSendT = 0, freqPending = null;
 function setFreq(f) {
   f = clamp(Math.round(f), 30000, 470000000);
-  S.freq_a = f; renderFreq(); drawOverlay();
+  S.freq_a = f; R[rawKey('freq_a')] = f; renderFreq(); drawOverlay();
   C.lockUntil.freq_a = performance.now() + 900;
   freqPending = f;
   const now = performance.now();
@@ -268,7 +287,7 @@ function setFreq(f) {
 function flushFreq() {
   if (freqPending == null) return;
   freqSendT = performance.now();
-  send({ t: 'set', k: 'freq_a', v: freqPending });
+  send({ t: 'set', k: rawKey('freq_a'), v: freqPending });
   freqPending = null;
   rememberBand();
 }
