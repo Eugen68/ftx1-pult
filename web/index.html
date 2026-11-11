@@ -41,11 +41,12 @@
   <section class="panel display" id="display">
     <div class="vfo-row">
       <div class="badges">
-        <span class="badge" id="bVfo">VFO-A</span>
+        <button class="badge bb" id="bVfo" title="Основной приёмник MAIN / SUB — переключить">MAIN</button>
+        <button class="badge bb off" id="bVm" title="Режим VFO / каналы памяти — переключить">VFO</button>
         <span class="badge mode" id="bMode">—</span>
-        <span class="badge off" id="bSplit">SPLIT</span>
-        <span class="badge off" id="bClar">CLAR</span>
-        <span class="badge off" id="bLock">LOCK</span>
+        <button class="badge bb off" id="bSplit" title="SPLIT: приём на A, передача на B — включить/выключить">SPLIT</button>
+        <button class="badge bb off" id="bClar" title="Расстройка приёма (CLAR) — включить/выключить">CLAR</button>
+        <button class="badge bb off" id="bLock" title="Блокировка ручки трансивера — включить/выключить">LOCK</button>
         <span class="badge busy off" id="bBusy" title="Шумоподавитель трансивера открыт — есть сигнал">BUSY</span>
         <span class="badge tx off" id="bTx">TX</span>
       </div>

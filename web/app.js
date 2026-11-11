@@ -201,6 +201,8 @@ function renderBadges() {
   $('#bMode').textContent = S.mode || '—';
   $('#bModeB').textContent = S.mode_b || '—';
   $('#bVfo').textContent = S.vfo ? 'SUB' : 'MAIN';
+  $('#bVm').textContent = S.vm ? `MEM ${S.mem_ch != null ? String(S.mem_ch).padStart(3, '0') : ''}`.trim() : 'VFO';
+  $('#bVm').classList.toggle('off', !S.vm);
   $('#bSplit').classList.toggle('off', !S.split);
   $('#bClar').classList.toggle('off', !(S.clar_rx || S.clar_tx));
   $('#bClar').textContent = (S.clar_rx || S.clar_tx) ? `CLAR ${S.clar > 0 ? '+' : ''}${S.clar}` : 'CLAR';
@@ -257,7 +259,7 @@ let freqSendT = 0, freqPending = null;
 function setFreq(f) {
   f = clamp(Math.round(f), 30000, 470000000);
   S.freq_a = f; renderFreq(); drawOverlay();
-  C.lockUntil.freq_a = performance.now() + 700;
+  C.lockUntil.freq_a = performance.now() + 900;
   freqPending = f;
   const now = performance.now();
   if (now - freqSendT > 60) flushFreq();
@@ -495,6 +497,12 @@ function renderControls(d) {
 $$('[data-act]').forEach(b => b.addEventListener('click', () => act(b.dataset.act)));
 $$('[data-set]').forEach(b => b.addEventListener('click', () => { const [k, v] = b.dataset.set.split(':'); setParam(k, +v); }));
 $('#btnSplit').onclick = () => setParam('split', S.split ? 0 : 1);
+// кнопки-индикаторы в верхней строке
+$('#bSplit').onclick = () => setParam('split', S.split ? 0 : 1);
+$('#bLock').onclick = () => setParam('lock', S.lock ? 0 : 1);
+$('#bClar').onclick = () => setParam('clar_rx', S.clar_rx ? 0 : 1);
+$('#bVfo').onclick = () => setParam('vfo', S.vfo ? 0 : 1);
+$('#bVm').onclick = () => { act(S.vm ? 'vfo_mode' : 'mem_mode'); S.vm = S.vm ? 0 : 1; renderBadges(); };
 $('#btnLock').onclick = () => setParam('lock', S.lock ? 0 : 1);
 $('#btnMemCh').onclick = () => act('mem_ch', +$('#memCh').value);
 

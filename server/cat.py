@@ -226,7 +226,7 @@ class SerialPtt:
 FAST_RX = ['SM0;', 'RI0;']
 FAST_TX = ['RM5;', 'RM6;', 'RM4;', 'RM3;']
 MEDIUM = ['FA;', 'FB;', 'MD0;', 'TX;']
-SLOW = ['MD1;', 'AG0;', 'RG0;', 'SQ0;', 'PC;', 'MG;', 'VX;', 'VG;', 'VD;', 'NL0;', 'RL0;',
+SLOW = ['VM0;', 'MC0;', 'MD1;', 'AG0;', 'RG0;', 'SQ0;', 'PC;', 'MG;', 'VX;', 'VG;', 'VD;', 'NL0;', 'RL0;',
         'BC0;', 'BP00;', 'BP01;', 'CO00;', 'CO01;', 'CO02;', 'CO03;', 'IS0;', 'SH0;',
         'GT0;', 'PA{band};', 'RA0;', 'NA0;', 'FT;', 'VS;', 'FR;', 'PR0;', 'PL;', 'ML0;',
         'ML1;', 'KS;', 'BI;', 'KP;', 'KR;', 'SD;', 'CF000;', 'CF001;', 'LK;', 'AC;',
@@ -243,6 +243,8 @@ class Rig:
         self.loop = None
         self._buf = b''
         self._q = None                      # очередь пользовательских команд
+        self._freq_pend = {}
+        self._freq_t = 0.0
         self._pending = None                # (prefix, future)
         self._unsupported = {}              # запрос -> число '?' подряд
         self._slow_i = 0
@@ -254,6 +256,8 @@ class Rig:
     async def start(self):
         self.loop = asyncio.get_running_loop()
         self._q = asyncio.Queue()
+        self._freq_pend = {}         # ключ -> последняя команда частоты
+        self._freq_t = 0.0
         self.t.open(self._on_bytes_thread)
         self._last_rx = time.monotonic()
         self._set({'connected': True})
@@ -391,6 +395,15 @@ class Rig:
                 # 1) команды пользователя — всегда первыми
                 while not self._q.empty():
                     cmd = self._q.get_nowait()
+                    if cmd.startswith('@'):           # частота: только последнее значение (ручка крутится быстрее, чем отвечает трансивер)
+                        key = cmd[1:-1]
+                        val = self._freq_pend.pop(key, None)
+                        if val is None:
+                            continue
+                        await self._xfer(val)
+                        await self._xfer('FA;' if key == 'freq_a' else 'FB;')
+                        self._freq_t = time.monotonic()
+                        continue
                     await self._xfer(cmd)
                 # 2) быстрый опрос шкал
                 for c in (FAST_TX if self.state.get('tx') else FAST_RX):
@@ -401,6 +414,8 @@ class Rig:
                 if now - last_medium > 0.3:
                     last_medium = now
                     for c in MEDIUM:
+                        if c in ('FA;', 'FB;') and (self._freq_pend or now - self._freq_t < 0.5):
+                            continue                  # частоту только что ставили — не читаем промежуточное
                         await self._poll(c)
                 # 3) медленный круговой опрос всех регуляторов
                 for _ in range(2):
@@ -485,10 +500,20 @@ class Rig:
         band = band_type(st.get('freq_a', 0))
         clamp = lambda x, lo, hi: max(lo, min(hi, int(round(float(x)))))
         cmds = []
-        if key == 'freq_a':
-            cmds = ['FA%09d;' % clamp(v, 30_000, 470_000_000)]
-        elif key == 'freq_b':
-            cmds = ['FB%09d;' % clamp(v, 30_000, 470_000_000)]
+        if key in ('freq_a', 'freq_b'):
+            # Не копим очередь из сотен команд FA при быстром вращении ручки: в очереди одна метка,
+            # а отправляется самое свежее значение. Иначе трансивер «догоняет» старые значения ещё секунды
+            # после остановки ручки и частота гуляет туда-сюда.
+            f = clamp(v, 30_000, 470_000_000)
+            cmd = ('FA%09d;' if key == 'freq_a' else 'FB%09d;') % f
+            first = key not in self._freq_pend
+            self._freq_pend[key] = cmd
+            if first:
+                self._q.put_nowait('@%s;' % key)
+            st[key] = f
+            if key == 'freq_a' and band_type(f) != band:
+                self.refresh(0.4)
+            return [cmd]
         elif key in ('mode', 'mode_b'):
             code = MODE_CODES.get(v)
             # повторная команда MD сбрасывает у Yaesu полосу фильтра к умолчанию — тот же вид не шлём
