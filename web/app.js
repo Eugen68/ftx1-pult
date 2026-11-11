@@ -539,7 +539,8 @@ function wfRow(row, binHz) {
   if (C.wfT) C.wfRate = (C.wfRate || 30) * 0.95 + 0.05 * (1000 / Math.max(1, tNow - C.wfT));
   C.wfT = tNow;
   if (C.tab === 'ft8' && !mirrored()) {
-    const N = Math.max(1, Math.round((C.wfRate || 30) * 50 / Math.max(50, wf.rows || 300)));
+    const secs = C.ftSecs ?? 20;     // сколько секунд видно на водопаде
+    const N = secs ? Math.max(1, Math.round((C.wfRate || 30) * secs / Math.max(50, wf.rows || 300))) : 1;
     if (!C.ftAcc || C.ftAcc.length !== row.length) { C.ftAcc = Uint8Array.from(row); C.ftAccN = 0; }
     else for (let i = 0; i < row.length; i++) if (row[i] > C.ftAcc[i]) C.ftAcc[i] = row[i];
     if (++C.ftAccN < N) return;
@@ -690,6 +691,7 @@ function tuneToAudio(a) {
 const SPAN_STEPS = [3000, 4000, 6000, 8000, 12000, 24000];
 function autoSpan() {
   const m = S.mode || '';
+  if (C.tab === 'ft8' && /^DATA/.test(m)) return 3000;     // FT8: весь участок 0–3000 Гц, как в JTDX
   if (C.autoLock && C.autoLock.mode === m) return C.autoLock.span;
   return /FM|C4FM/.test(m) ? 4000 : /^AM/.test(m) ? 4000 : isCW(m) ? 3000 : 4000;
 }
@@ -910,7 +912,12 @@ $$('#tabs button').forEach(b => b.onclick = () => {
   $$('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + b.dataset.tab));
   if (b.dataset.tab === 'menu' && !menu.items) send({ t: 'menu_list' });
   C.tab = b.dataset.tab;
+  document.body.classList.toggle('tab-ft8', C.tab === 'ft8');
+  const hint = $('#wfHint');
+  if (hint) hint.textContent = C.tab === 'ft8' ? 'Клик — RX, правый клик / Shift — TX, двойной — оба' : 'Двойной клик — настроиться на сигнал';
   window.ft8Desk && ft8Desk.marks();
+  if (typeof updateSpan === 'function') updateSpan();
+  requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
   store.set('tab', b.dataset.tab);
 });
 
@@ -2175,6 +2182,9 @@ const ft8Desk = (() => {
   $('#ftClear2').onclick = () => { rxList.innerHTML = ''; st.rxRows = 0; };
   $('#ftOnlyCq').checked = store.get('ftOnlyCq', false);
   $('#ftOnlyCq').onchange = e => { store.set('ftOnlyCq', e.target.checked); applyFilter(); };
+  C.ftSecs = +store.get('ftWfSpeed', 20) || 0;
+  $('#ftWfSpeed').value = String(C.ftSecs);
+  $('#ftWfSpeed').onchange = e => { C.ftSecs = +e.target.value; store.set('ftWfSpeed', C.ftSecs); };
   $('#ftWfLab').checked = st.labOn;
   $('#ftWfLab').onchange = e => { st.labOn = e.target.checked; store.set('ftWfLab', st.labOn); marks(); };
   const CFG = { ftCall: 'my_call', ftGrid: 'my_grid', ftPwr: 'ft_pwr', ftTries: 'ft_tries', ftLevel: 'ft_tx_level',
@@ -2329,23 +2339,25 @@ const ft8Desk = (() => {
   }
   function sep(text) { const d = document.createElement('div'); d.className = 'ft-sep'; d.textContent = text; return d; }
   const seen = new Set();
+  // списки прокручиваются к новым строкам, пока пользователь сам не отмотал вверх
+  const follow = new Map([[list, true], [rxList, true]]);
+  for (const el of [list, rxList]) el.addEventListener('scroll', () => follow.set(el, el.scrollTop + el.clientHeight >= el.scrollHeight - 30));
+  const toEnd = el => { if (follow.get(el)) el.scrollTop = el.scrollHeight; };
   function addSlot(m) {
     const key = m.mode + m.slot;
     if (seen.has(key)) return;                // повтор при переподключении
     seen.add(key);
     $('#ftHint')?.remove();
     const utc = fmtUtc(m.slot), hh = `${m.slot.slice(0, 2)}:${m.slot.slice(2, 4)}:${m.slot.slice(4, 6)}`;
-    const end = list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
     list.append(sep(`────── ${hh} ${m.mode} ${m.items.length ? '' : '· тишина '}──────`));
     for (const it of m.items) { list.append(row(it, utc)); st.rows++; }
     trim(list, 'rows'); applyFilter();
-    if (end) list.scrollTop = list.scrollHeight;
+    toEnd(list);
     const mine = m.items.filter(it => nearRx(it) || it.tags.includes('me'));
     if (mine.length) {
-      const end2 = rxList.scrollTop + rxList.clientHeight >= rxList.scrollHeight - 40;
       for (const it of mine) { rxList.append(row(it, utc)); st.rxRows++; }
       trim(rxList, 'rxRows');
-      if (end2) rxList.scrollTop = rxList.scrollHeight;
+      toEnd(rxList);
     }
   }
   function addMine(text, slot) {
@@ -2353,7 +2365,7 @@ const ft8Desk = (() => {
     r.className = 'ft-row mine';
     r.innerHTML = `<span>${slot ? fmtUtc(slot) : ''}</span><span class="n">TX</span><span class="n"></span><span class="n">${st.txHz}</span><span class="tx">${esc(text)}</span>`;
     rxList.append(r); st.rxRows++;
-    rxList.scrollTop = rxList.scrollHeight;
+    follow.set(rxList, true); toEnd(rxList);
   }
   function addLog(q) {
     const L = $('#ftLog'); L.querySelector('.muted')?.remove();

@@ -401,7 +401,7 @@ body.fit .cw-screen { max-height: 30vh; }
 .ft-slot div { height: 100%; width: 0; background: #3ddc84; }
 .ft-slot.tx div { background: var(--tx); }
 .ft-panes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-top: 6px; }
-@media (max-width: 800px) { .ft-panes { grid-template-columns: minmax(0, 1fr); } #ftWfHint { display: none; } }
+@media (max-width: 800px) { .ft-panes { grid-template-columns: minmax(0, 1fr); } }
 .ft-head { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; font-size: 13px; }
 .ft-rxlbl { color: #3ddc84; }
 .ft-th, .ft-row { display: grid; grid-template-columns: 52px 30px 34px 40px minmax(0, 1fr); gap: 6px; padding: 1px 6px; white-space: nowrap; }
@@ -424,6 +424,7 @@ body.fit .cw-screen { max-height: 30vh; }
 .ft-box { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .ft-btns .btn { width: 100%; }
 .ft-freqs label, .ft-btns label.mini { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.ft-btns label.chk { justify-content: flex-start; }
 .ft-freqs .text, .ft-freqs .num { width: 96px; }
 .ft-freqs .btn-row { display: flex; gap: 6px; }
 .ft-freqs .btn-row .btn { flex: 1; }
@@ -446,3 +447,31 @@ body.fit .cw-screen { max-height: 30vh; }
 .ft-cfg-grid label { display: flex; flex-direction: column; gap: 2px; }
 .ft-cfg-grid label.chk { flex-direction: row; align-items: center; grid-column: 1 / -1; }
 .ft-cfg-grid .text, .ft-cfg-grid .num { width: 100%; }
+
+/* FT8: компоновка как у JTDX — списки во всю высоту, управление справа */
+.tabs-panel { container-type: inline-size; }
+.ft-side { margin-top: 8px; }
+body.fit.tab-ft8:not(.wide) .layout { grid-template-rows: minmax(0, 1fr) minmax(0, 52%); }
+@container (min-width: 980px) {
+  .ft-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(330px, 360px); gap: 8px; margin-top: 6px; }
+  .ft-main .ft-panes { margin-top: 0; }
+  .ft-side { margin-top: 0; }
+  .ft-side .ft-ctl { grid-template-columns: minmax(0, 1fr); }
+  .ft-freqs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+  .ft-freqs label { flex-direction: column; align-items: stretch; gap: 2px; }
+  .ft-freqs .btn-row, .ft-freqs #ftGen { grid-column: 1 / -1; }
+  .ft-freqs .text, .ft-freqs .num { width: 100%; }
+  .ft-side .ft-bottom { grid-template-columns: minmax(0, 1fr); }
+  .ft-side .ft-txmsg { min-width: 0; width: 100%; }
+  .ft-side .ft-status { margin-top: 0; flex-direction: column; align-items: stretch; gap: 3px; }
+  .ft-side .ft-ctl { margin-top: 6px; }
+  .ft-btns { display: grid; grid-template-columns: 1fr 1fr; align-content: start; }
+  .ft-btns label { grid-column: 1 / -1; justify-content: flex-start; }
+  /* в компоновке «по размеру окна» списки и управление занимают всю высоту вкладки */
+  body.fit #tab-ft8.on { display: flex; flex-direction: column; overflow: hidden; }
+  body.fit #tab-ft8 .ft-main { flex: 1; min-height: 0; }
+  body.fit #tab-ft8 .ft-panes { min-height: 0; height: 100%; }
+  body.fit #tab-ft8 .ft-pane { display: flex; flex-direction: column; min-height: 0; }
+  body.fit #tab-ft8 .ft-list { flex: 1; height: auto; min-height: 100px; }
+  body.fit #tab-ft8 .ft-side { min-height: 0; overflow-y: auto; scrollbar-width: thin; padding-right: 2px; }
+}

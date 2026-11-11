@@ -452,11 +452,14 @@
         <div class="ft-slot"><div id="ftSlotBar"></div></div>
         <span class="muted small mono" id="ftDt" title="Среднее смещение времени принятых станций. Больше ±0,5 с — подведите часы ПК">dt —</span>
         <span class="spacer"></span>
-        <span class="muted small" id="ftWfHint">Водопад: клик — RX, правый клик/Shift — TX, двойной — оба</span>
+        <label class="mini" title="Сколько секунд помещается на водопаде. На водопаде: клик — RX, правый клик/Shift — TX, двойной — оба">Водопад<select id="ftWfSpeed">
+          <option value="0">как в других режимах</option><option value="10">быстро (~10 с)</option>
+          <option value="20">средне (~20 с)</option><option value="35">медленно (~35 с)</option><option value="60">очень медленно (~60 с)</option></select></label>
       </div>
+      <div class="ft-main">
       <div class="ft-panes">
         <div class="ft-pane">
-          <div class="ft-head"><b>Активность диапазона</b>
+          <div class="ft-head"><b title="Активность диапазона">Активность</b>
             <label class="chk mini"><input type="checkbox" id="ftOnlyCq"> только CQ и мне</label>
             <span class="spacer"></span><button class="btn small" id="ftClear">Очистить</button></div>
           <div class="ft-th mono"><span>UTC</span><span>дБ</span><span>DT</span><span>Част</span><span>Сообщение</span></div>
@@ -470,6 +473,8 @@
           <div class="ft-list mono" id="ftRxList"></div>
         </div>
       </div>
+      <div class="ft-side">
+      <div class="ft-status"><span class="ft-txmsg mono" id="ftTxMsg">—</span> <span class="ft-qso small" id="ftQso">Связи нет</span></div>
       <div class="ft-ctl">
         <div class="ft-box ft-btns">
           <button class="btn" id="ftEnable" title="Разрешить передачу (Enable TX)">Включить TX</button>
@@ -492,7 +497,6 @@
         </div>
         <div class="ft-box ft-msgs" id="ftMsgs"></div>
       </div>
-      <div class="ft-status"><span class="ft-txmsg mono" id="ftTxMsg">—</span> <span class="ft-qso small" id="ftQso">Связи нет</span></div>
       <div class="ft-bottom">
         <div>
           <h4>Связи <span class="muted small" id="ftLogInfo"></span></h4>
@@ -515,6 +519,8 @@
           <p class="muted small">Каждая связь пишется в файл <span class="mono">ft8_log.adi</span> рядом с программой и отправляется по UDP в формате WSJT-X —
             его принимают HAMLOG-агент, Log4OM, JTAlert, GridTracker. Часы ПК должны быть точными (±0,5 с).</p>
         </details>
+      </div>
+      </div>
       </div>
     </div>
 
