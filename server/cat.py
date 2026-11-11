@@ -100,7 +100,8 @@ PARSERS = [
     (r'PA([0-2])(\d)', lambda m: {'preamp%s' % m.group(1): int(m.group(2))}),
     (r'RA0(\d)', lambda m: {'att': int(m.group(1))}),
     (r'NA0(\d)', lambda m: {'narrow': int(m.group(1))}),
-    (r'FT(\d)', lambda m: {'split': int(m.group(1))}),
+    (r'FT(\d)', lambda m: {'tx_vfo': int(m.group(1))}),      # FUNCTION TX: на каком VFO передача
+    (r'ST(\d)', lambda m: {'split': 1 if int(m.group(1)) else 0}),   # SPLIT
     (r'VS(\d)', lambda m: {'vfo': int(m.group(1))}),
     (r'FR(\d{2})', lambda m: {'dual': 1 if m.group(1) == '00' else 0}),
     (r'PR0(\d)', lambda m: {'proc': 1 if m.group(1) == '2' else 0}),
@@ -228,7 +229,7 @@ FAST_TX = ['RM5;', 'RM6;', 'RM4;', 'RM3;']
 MEDIUM = ['FA;', 'FB;', 'MD0;', 'TX;']
 SLOW = ['VM0;', 'MC0;', 'MD1;', 'AG0;', 'RG0;', 'SQ0;', 'PC;', 'MG;', 'VX;', 'VG;', 'VD;', 'NL0;', 'RL0;',
         'BC0;', 'BP00;', 'BP01;', 'CO00;', 'CO01;', 'CO02;', 'CO03;', 'IS0;', 'SH0;',
-        'GT0;', 'PA{band};', 'RA0;', 'NA0;', 'FT;', 'VS;', 'FR;', 'PR0;', 'PL;', 'ML0;',
+        'GT0;', 'PA{band};', 'RA0;', 'NA0;', 'FT;', 'ST;', 'VS;', 'FR;', 'PR0;', 'PL;', 'ML0;',
         'ML1;', 'KS;', 'BI;', 'KP;', 'KR;', 'SD;', 'CF000;', 'CF001;', 'LK;', 'AC;',
         'CT0;', 'CN00;', 'CN01;', 'OS0;', 'TS;', 'AO;', 'RM8;', 'RM7;', 'SM1;']
 
@@ -572,6 +573,8 @@ class Rig:
         elif key == 'narrow':
             cmds = ['NA0%d;' % (1 if int(v) else 0)]
         elif key == 'split':
+            cmds = ['ST%d;' % (1 if int(v) else 0)]     # SPLIT (FT — это выбор VFO передачи, не сплит)
+        elif key == 'tx_vfo':
             cmds = ['FT%d;' % (1 if int(v) else 0)]
         elif key == 'vfo':
             cmds = ['VS%d;' % (1 if int(v) else 0)]
@@ -628,7 +631,7 @@ class Rig:
             readback = {
                 'freq_a': 'FA;', 'freq_b': 'FB;', 'mode': 'MD0;', 'mode_b': 'MD1;',
                 'power': 'PC;', 'mic': 'MG;', 'vox': 'VX;', 'vox_gain': 'VG;', 'vox_delay': 'VD;',
-                'split': 'FT;', 'vfo': 'VS;', 'dual': 'FR;', 'proc_level': 'PL;', 'key_speed': 'KS;',
+                'split': 'ST;', 'tx_vfo': 'FT;', 'vfo': 'VS;', 'dual': 'FR;', 'proc_level': 'PL;', 'key_speed': 'KS;',
                 'bk': 'BI;', 'key_pitch': 'KP;', 'keyer': 'KR;', 'bk_delay': 'SD;', 'lock': 'LK;',
                 'txw': 'TS;', 'amc': 'AO;', 'dimmer': 'DA;', 'meter_sel': 'MS;',
                 'notch': 'BP00;', 'notch_freq': 'BP01;', 'contour': 'CO00;', 'contour_freq': 'CO01;',
