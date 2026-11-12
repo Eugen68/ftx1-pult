@@ -515,9 +515,10 @@ function renderControls(d) {
 }
 $$('[data-act]').forEach(b => b.addEventListener('click', () => act(b.dataset.act)));
 $$('[data-set]').forEach(b => b.addEventListener('click', () => { const [k, v] = b.dataset.set.split(':'); setParam(k, +v); }));
-$('#btnSplit').onclick = () => setParam('split', S.split ? 0 : 1);
+// SPLIT как на FTX-1: частота SUB переносится в основной приёмник, частоты меняются местами (команда SV)
+$('#btnSplit').onclick = () => { act('swap'); toast('SPLIT: A ⇄ B', 1300); };
 // кнопки-индикаторы в верхней строке
-$('#bSplit').onclick = () => setParam('split', S.split ? 0 : 1);
+$('#bSplit').onclick = () => { act('swap'); toast('SPLIT: A ⇄ B', 1300); };
 $('#bLock').onclick = () => setParam('lock', S.lock ? 0 : 1);
 $('#bClar').onclick = () => setParam('clar_rx', S.clar_rx ? 0 : 1);
 $('#bVfo').onclick = () => setParam('vfo', S.vfo ? 0 : 1);
