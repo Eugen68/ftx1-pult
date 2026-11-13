@@ -40,7 +40,8 @@ def fetch_cty(destination, sources=SOURCES):
             return url
         except Exception as error:
             failures.append('%s: %s' % (url, error))
-            print('Country data source unavailable: %s' % failures[-1])
+            message = 'Country data source unavailable: %s' % failures[-1]
+            print(message.encode('ascii', 'backslashreplace').decode('ascii'))
     raise RuntimeError('No valid DXCC database could be downloaded: ' + '; '.join(failures))
 
 
