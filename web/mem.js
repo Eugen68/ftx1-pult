@@ -3,7 +3,7 @@
 const memEd = (() => {
   const CH_MIN = 1, CH_MAX = 999;
   const FM = ['FM', 'FM-N', 'DATA-FM', 'DATA-FM-N'];
-  const FIELDS = ['empty', 'freq', 'mode', 'name', 'shift', 'tone_mode', 'ctcss', 'dcs', 'clar', 'rx_clar', 'tx_clar'];
+  const FIELDS = ['empty', 'freq', 'mode', 'name', 'shift', 'split', 'tx_freq', 'tone_mode', 'ctcss', 'dcs', 'clar', 'rx_clar', 'tx_clar'];
   const GCOL = ['#4cc9f0', '#f8961e', '#90be6d', '#f94144', '#b5179e', '#ffd166', '#43aa8b', '#9d8df1', '#e76f51', '#6c9bd2'];
   const st = {
     chans: {}, rig: {}, groups: [], file: '', info: null, sel: new Set(), filterGrp: '*', busy: false,
@@ -11,12 +11,12 @@ const memEd = (() => {
   };
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const blank = ch => ({ ch, empty: true, freq: 0, mode: 'FM', name: '', clar: 0, rx_clar: false, tx_clar: false, tone_mode: 0,
-    ctcss: 88.5, dcs: 23, shift: 0, offset_khz: 0, group: '', comment: '' });
+    ctcss: 88.5, dcs: 23, shift: 0, offset_khz: 0, split: false, tx_freq: 0, group: '', comment: '' });
   const defOffset = f => { const m = f / 1e6; return m >= 28 && m < 30 ? 100 : m >= 50 && m < 54 ? 600 : m >= 144 && m < 148 ? 600 : m >= 430 && m < 440 ? 7600 : 0; };
   const fmtMHz = f => f ? (f / 1e6).toFixed(6).replace(/0{1,3}$/, '') : '';
   const allCh = () => { const a = []; for (let i = CH_MIN; i <= CH_MAX; i++) a.push(i); return a; };
   const label = ch => String(ch).padStart(3, '0');
-  const txFreq = c => c.freq + (c.shift === 1 ? 1 : c.shift === 2 ? -1 : 0) * (c.offset_khz || 0) * 1000;
+  const txFreq = c => c.split ? c.tx_freq : c.freq + (c.shift === 1 ? 1 : c.shift === 2 ? -1 : 0) * (c.offset_khz || 0) * 1000;
   const same = (a, b) => FIELDS.every(k => (a.empty && b.empty) || (k === 'ctcss' ? Math.abs(a[k] - b[k]) < 0.05 : String(a[k] ?? '') === String(b[k] ?? '')))
     || (a.empty && b.empty);
   const isDirty = ch => { const c = st.chans[ch], r = st.rig[ch]; if (!r) return !c.empty; return !same(c, r); };
@@ -46,9 +46,9 @@ const memEd = (() => {
       <td><input data-f="name" class="nm" maxlength="12" value="${esc(c.name)}" placeholder="${e ? '' : '—'}"></td>
       <td><input data-f="freq" class="fq" inputmode="decimal" value="${e ? '' : fmtMHz(c.freq)}" placeholder="пусто"></td>
       <td><select data-f="mode">${opts(modes, c.mode)}</select></td>
-      <td><select data-f="shift"${fm ? '' : ' disabled'}>${opts([0, 1, 2], c.shift, v => ['симпл.', '+', '−'][v])}</select></td>
-      <td><input data-f="offset_khz" class="of" type="number" min="0" step="5" value="${c.shift ? c.offset_khz : ''}"${fm && c.shift ? '' : ' disabled'}></td>
-      <td class="txf">${!e && c.shift ? fmtMHz(txFreq(c)) : ''}</td>
+      <td><select data-f="shift"${e ? ' disabled' : ''}>${opts(fm ? [0, 1, 2, 3] : [0, 3], c.split ? 3 : c.shift, v => ['симпл.', '+', '−', 'отд. TX'][v])}</select></td>
+      <td><input data-f="offset_khz" class="of" type="number" min="0" step="5" value="${c.shift && !c.split ? c.offset_khz : ''}"${fm && c.shift && !c.split ? '' : ' disabled'}></td>
+      <td class="txf">${c.split ? `<input data-f="tx_freq" class="fq tx" inputmode="decimal" value="${fmtMHz(c.tx_freq)}">` : !e && c.shift ? fmtMHz(txFreq(c)) : ''}</td>
       <td><select data-f="tone_mode"${fm ? '' : ' disabled'}>${opts([0, 1, 2, 3], c.tone_mode, v => ['выкл', 'ENC', 'TSQ', 'DCS'][v])}</select></td>
       <td><select data-f="ctcss"${fm && (c.tone_mode === 1 || c.tone_mode === 2) ? '' : ' disabled'}>${opts(ctcss, c.ctcss, v => (+v).toFixed(1))}</select></td>
       <td><select data-f="dcs"${fm && c.tone_mode === 3 ? '' : ' disabled'}>${opts(dcs, c.dcs, v => String(v).padStart(3, '0'))}</select></td>
@@ -115,7 +115,16 @@ const memEd = (() => {
         if (wasEmpty) c.mode = hz >= 144e6 || (hz >= 29.5e6 && hz < 29.7e6) ? 'FM' : hz < 10e6 ? 'LSB' : 'USB';
         if (!c.offset_khz) c.offset_khz = defOffset(hz);
       }
-    } else if (['shift', 'tone_mode', 'dcs', 'clar', 'offset_khz'].includes(f)) c[f] = parseInt(v, 10) || 0;
+    } else if (f === 'shift') {
+      const n = parseInt(v, 10) || 0;
+      if (n === 3) { c.split = true; c.shift = 0; if (!c.tx_freq) c.tx_freq = c.freq; }
+      else { c.split = false; c.shift = n; }
+    } else if (f === 'tx_freq') {
+      let mhz = parseFloat(String(v).replace(',', '.')); if (mhz > 1000) mhz /= 1000;
+      const hz = Math.round(mhz * 1e6);
+      if (!(hz >= 30e3 && hz <= 470e6)) { toast('Частота передачи вне диапазона'); renderRow(ch); return; }
+      c.tx_freq = hz;
+    } else if (['tone_mode', 'dcs', 'clar', 'offset_khz'].includes(f)) c[f] = parseInt(v, 10) || 0;
     else if (f === 'ctcss') c[f] = parseFloat(v);
     else if (f === 'name') c[f] = String(v).replace(/[^\x20-\x7e]|;/g, '').slice(0, 12);
     else c[f] = v;

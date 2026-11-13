@@ -1,16 +1,16 @@
 """
 Редактор каналов памяти FTX-1: чтение всех каналов, правка, запись обратно, файлы и группы.
 
-Как это работает по CAT (проверено разработчиками Hamlib на прошивке 1.12, см. rigs/yaesu/ftx1/ftx1_mem.c):
-  * MR00001;  -> MR 00001 FFFFFFFFF ±OOOO R T M V C 00 S ;  (частота, клар, вид, тон-режим, сдвиг)
-                 «?» — канал пустой.  Режим тона в MR: 0 выкл, 1 TSQ, 2 ENC, 3 DCS.
-  * MT00001;  -> имя (12 знаков);  MT00001ИМЯ........;  — записать имя.
-  * Номер тона/кода DCS в MR нет: его читаем, переключив трансивер на канал (MC0nnnnn) и спросив CN00/CN01,
-    потом возвращаем трансивер как было.
-  * Команда MW в прошивке не работает (всегда «?»), поэтому канал пишется так же, как в Hamlib:
-    курсор памяти SUB на нужный канал (MC1nnnnn), VFO-B настраивается на частоту/вид/тон/сдвиг/клар,
-    BM — «VFO-B в память», затем имя (MT). Частота и вид VFO-B после записи возвращаются.
-    Ограничения прошивки: код DCS и флаг TX-клара командой BM не сохраняются.
+Как это работает по CAT (проверено на FTX-1 с прошивкой 1.13, 13.11.2026):
+  * MR00001;  -> MR 00001 FFFFFFFFF ±OOOO R T M 1 C 00 S ;  частота, клар, вид, режим тона, сдвиг; «?» — пусто.
+                 Режим тона в MR: 0 выкл, 1 TSQ, 2 ENC (DCS в MR показывается как 0).
+  * MW — тот же формат, P7 = 1: создаёт/переписывает канал (частота, вид, клар, сдвиг, ENC/TSQ).
+    Номер тона и DCS командой MW не задаются (и MW с режимом 3 отвечает «?»).
+  * Номер CTCSS/код DCS/режим DCS сохраняет команда AM («VFO-A в память»): курсор MAIN ставится на канал
+    (MC0nnnnn), MAIN — в VFO (VM000), VFO-A настраивается (FA, MD0, CT0, CN00/CN01, OS0), затем AM.
+    AM стирает имя — поэтому имя (MT) пишется после. VFO-A и положение MAIN после записи возвращаются.
+  * MT00001ИМЯ; — имя;  MZ00001 F TTTTTTTTT; — отдельная частота передачи (F=1 вкл, T — частота TX).
+  * Чтение тонов: канал включается (MC0nnnnn), спрашиваются CT0, CN00, CN01, трансивер возвращается как был.
 
 Разнос (величина сдвига ретранслятора) в канале FTX-1 не хранится — только направление (симплекс/+/−),
 а величина берётся из меню FM RPT SHIFT по диапазону. В файле редактора разнос хранится для удобства
@@ -74,7 +74,7 @@ def parse_mr(frame):
 def blank(ch):
     return {'ch': ch, 'empty': True, 'freq': 0, 'mode': 'FM', 'name': '', 'clar': 0, 'rx_clar': False,
             'tx_clar': False, 'tone_mode': 0, 'ctcss': 88.5, 'dcs': 23, 'shift': 0, 'offset_khz': 0,
-            'group': '', 'comment': ''}
+            'split': False, 'tx_freq': 0, 'group': '', 'comment': ''}
 
 
 def clean(c):
@@ -100,6 +100,13 @@ def clean(c):
     out['dcs'] = d if d in DCS else 23
     out['shift'] = int(c.get('shift') or 0) if int(c.get('shift') or 0) in (0, 1, 2) else 0
     out['offset_khz'] = max(0, min(100000, int(float(c.get('offset_khz') or 0))))
+    out['split'] = bool(c.get('split'))
+    try:
+        out['tx_freq'] = int(round(float(c.get('tx_freq') or 0)))
+    except (TypeError, ValueError):
+        out['tx_freq'] = 0
+    if out['split'] and not 30_000 <= out['tx_freq'] <= 470_000_000:
+        out['split'] = False
     out['group'] = str(c.get('group') or '')[:40]
     out['comment'] = str(c.get('comment') or '')[:200]
     return out
@@ -135,16 +142,30 @@ class MemoryDesk:
         c = parse_mr(mr)
         if not c:
             return blank(ch)
-        mt = (await self.rig.exec_seq(['MT%05d' % ch]))[0]
+        mt, mz = await self.rig.exec_seq(['MT%05d' % ch, 'MZ%05d' % ch])
+        mm = re.match(r'^MZ\d{5}([01])(\d{9})', mz or '')
+        if mm:
+            c_split, c_tx = mm.group(1) == '1', int(mm.group(2))
+        else:
+            c_split, c_tx = False, 0
         c = dict(blank(ch), **c)
         if mt and mt.startswith('MT%05d' % ch):
             c['name'] = mt[7:19].rstrip()
         c['offset_khz'] = default_offset_khz(c['freq']) if c['shift'] else 0
+        c['split'], c['tx_freq'] = c_split, c_tx if c_split else 0
         return c
 
+    async def _q(self, cmd, prefix, tries=2):
+        """Запрос с проверкой, что ответ именно на него (трансивер с AI присылает и чужие CN/CT)."""
+        for _ in range(tries):
+            r = (await self.rig.exec_seq(['~120', cmd]))[1] or ''
+            if r.startswith(prefix):
+                return r
+        return ''
+
     async def read_tones(self, chans):
-        """Номер CTCSS / код DCS: трансивер ненадолго переключается на канал, потом возвращается."""
-        need = [c for c in chans if not c['empty'] and c['tone_mode']]
+        """Режим тона, номер CTCSS и код DCS: канал на мгновение включается, потом трансивер возвращается."""
+        need = [c for c in chans if not c['empty'] and c['mode'] in FM_MODES]
         if not need:
             return
         r = await self.rig.exec_seq(['VM0', 'MC0'])
@@ -153,19 +174,28 @@ class MemoryDesk:
             for c in need:
                 if self.stop_flag:
                     break
-                q = 'CN01' if c['tone_mode'] == 3 else 'CN00'
-                a = await self.rig.exec_seq(['MC0%05d' % c['ch'], '~60', q])
-                m = re.match(r'^CN0[01](\d{3})', a[2] or '')
+                await self.rig.exec_seq(['MC0%05d' % c['ch'], '~200'])
+                ct = await self._q('CT0', 'CT0')
+                cn = await self._q('CN00', 'CN00')
+                dc = await self._q('CN01', 'CN01')
+                m = re.match(r'^CT0(\d)', ct)
                 if m:
-                    i = int(m.group(1))
-                    if c['tone_mode'] == 3 and i < len(DCS):
-                        c['dcs'] = DCS[i]
-                    elif c['tone_mode'] != 3 and i < len(CTCSS):
-                        c['ctcss'] = CTCSS[i]
+                    c['tone_mode'] = int(m.group(1)) if int(m.group(1)) in (0, 1, 2, 3) else 0
+                m = re.match(r'^CN00(\d{3})', cn)
+                if m and int(m.group(1)) < len(CTCSS):
+                    c['ctcss'] = CTCSS[int(m.group(1))]
+                m = re.match(r'^CN01(\d{3})', dc)
+                if m and int(m.group(1)) < len(DCS):
+                    c['dcs'] = DCS[int(m.group(1))]
         finally:
-            back = saved_mc if saved_vm.startswith('VM011') and saved_mc.startswith('MC') else 'VM000'
-            await self.rig.exec_seq([back])
+            await self._restore_pos(saved_vm, saved_mc)
             self.rig.refresh(0.2)
+
+    async def _restore_pos(self, saved_vm, saved_mc):
+        if saved_vm.startswith('VM011') and re.match(r'^MC0\d{5}$', saved_mc):
+            await self.rig.exec_seq([saved_mc])
+        else:
+            await self.rig.exec_seq(['VM000'])
 
     async def _read_all(self, c, rng, tones):
         chans = []
@@ -193,45 +223,55 @@ class MemoryDesk:
             self.task = None
 
     # ------------------------------------------------------------------ запись
-    def _write_cmds(self, c):
-        ch = c['ch']
-        code = MODE_CODES.get(c['mode'], '4')
-        cmds = ['MC1%05d' % ch, '~80', 'VM000', 'FB%09d' % c['freq'], 'MD1%s' % code]
-        if c['mode'] in FM_MODES:
-            if c['tone_mode'] == 3:
-                cmds += ['CT13', 'CN11%03d' % DCS.index(c['dcs'])]
-            elif c['tone_mode'] in (1, 2):
-                cmds += ['CT1%d' % c['tone_mode'], 'CN10%03d' % CTCSS.index(c['ctcss'])]
-            else:
-                cmds += ['CT10']
-            cmds += ['OS1%d' % c['shift']]
-        if c['clar'] or c['rx_clar'] or c['tx_clar']:
-            cmds += ['CF100%d0000' % (1 if c['rx_clar'] else 0), 'CF100%d0000' % (3 if c['tx_clar'] else 2),
-                     'CF101%s%04d' % ('-' if c['clar'] < 0 else '+', abs(c['clar']))]
-        else:
-            cmds += ['CF10000000', 'CF10020000', 'CF101+0000']
-        cmds += ['BM', '~150', 'MT%05d%-12s' % (ch, c['name'][:12])]
-        return cmds
+    @staticmethod
+    def _mw(c):
+        """Команда MW (P7 = 1). Режим тона в кодировке памяти: 1 TSQ, 2 ENC; DCS задаётся через AM."""
+        ct = {0: 0, 1: 2, 2: 1, 3: 0}[c['tone_mode']] if c['mode'] in FM_MODES else 0
+        sh = c['shift'] if c['mode'] in FM_MODES else 0
+        return 'MW%05d%09d%s%04d%d%d%s1%d00%d' % (c['ch'], c['freq'], '-' if c['clar'] < 0 else '+', abs(c['clar']),
+                                                 int(c['rx_clar']), int(c['tx_clar']),
+                                                 MODE_CODES.get(c['mode'], '4'), ct, sh)
 
     async def write_channel(self, c):
-        # Сначала убеждаемся, что курсор памяти SUB встал именно на нужный канал: BM пишет VFO-B
-        # «в последний выбранный канал», и при неверном курсоре запись ушла бы в чужую ячейку.
-        r = await self.rig.exec_seq(['MC1%05d' % c['ch'], '~120', 'MC1'])
-        m = re.match(r'^MC1?(\d{5,6})$', r[2] or '')
-        if not m or int(m.group(1)) != c['ch']:
-            raise RuntimeError('трансивер не встал на канал %d (ответ «%s») — запись остановлена, ничего не записано'
-                               % (c['ch'], r[2]))
-        snap = await self.rig.exec_seq(['FB', 'MD1'])
-        try:
-            await self.rig.exec_seq(self._write_cmds(c))
-        finally:
-            back = ['CF10000000', 'CF10020000', 'CF101+0000']
-            if c['mode'] in FM_MODES:
-                back += ['CT10', 'OS10']
-            back += [x for x in snap if x and x != '?']
-            await self.rig.exec_seq(back)
-        got = await self.read_channel(c['ch'])
-        # проверка: частота, вид, имя
+        ch = c['ch']
+        was_empty = not parse_mr((await self.rig.exec_seq(['MR%05d' % ch]))[0])
+        fm = c['mode'] in FM_MODES
+        code = MODE_CODES.get(c['mode'], '4')
+        # 1) канал должен существовать, чтобы на него можно было встать (пустой создаём командой MW)
+        if was_empty:
+            await self.rig.exec_seq([self._mw(c), '~150'])
+            if not parse_mr((await self.rig.exec_seq(['MR%05d' % ch]))[0]):
+                raise RuntimeError('трансивер не создал канал %d — запись остановлена' % ch)
+        need_am = fm and (c['tone_mode'] in (1, 2, 3))
+        if need_am:
+            # 2) номер тона / DCS: через VFO-A и AM (MW их не задаёт)
+            snap = await self.rig.exec_seq(['VM0', 'MC0'])
+            saved_vm, saved_mc = snap[0] or '', snap[1] or ''
+            r = await self.rig.exec_seq(['MC0%05d' % ch, '~200', 'MC0'])
+            m = re.match(r'^MC0(\d{5})$', r[2] or '')
+            if not m or int(m.group(1)) != ch:
+                await self._restore_pos(saved_vm, saved_mc)
+                raise RuntimeError('трансивер не встал на канал %d (ответ «%s») — запись остановлена' % (ch, r[2]))
+            await self.rig.exec_seq(['VM000', '~150'])
+            va = await self.rig.exec_seq(['FA', 'MD0', 'CT0', 'CN00', 'CN01', 'OS0'])
+            try:
+                cmds = ['FA%09d' % c['freq'], 'MD0%s' % code, '~100', 'OS0%d' % c['shift']]
+                if c['tone_mode'] == 3:
+                    cmds += ['CN01%03d' % DCS.index(c['dcs']), 'CT03']
+                else:
+                    cmds += ['CN00%03d' % CTCSS.index(c['ctcss']), 'CT0%d' % c['tone_mode']]
+                await self.rig.exec_seq(cmds + ['~100', 'AM', '~250'])
+            finally:
+                back = [x for x in va if x and x != '?' and re.match(r'^(FA|MD0|CT0|CN0[01]|OS0)', x)]
+                await self.rig.exec_seq(back + ['~100'])
+                await self._restore_pos(saved_vm, saved_mc)
+        # 3) частота/вид/клар/сдвиг — MW (номер тона не трогает); для DCS MW не принимает режим 3 — пропускаем
+        if c['tone_mode'] != 3 or not fm:
+            await self.rig.exec_seq([self._mw(c), '~150'])
+        # 4) имя (AM его стирает) и отдельная частота передачи
+        tx = c['tx_freq'] if c['split'] else c['freq']
+        await self.rig.exec_seq(['MT%05d%-12s' % (ch, c['name'][:12]), 'MZ%05d%d%09d' % (ch, int(c['split']), tx), '~150'])
+        got = await self.read_channel(ch)
         problems = []
         if got['empty']:
             problems.append('трансивер не принял канал')
@@ -242,10 +282,10 @@ class MemoryDesk:
                 problems.append('вид %s' % got['mode'])
             if got['name'].rstrip() != c['name'].rstrip():
                 problems.append('имя «%s»' % got['name'])
-            if c['mode'] in FM_MODES and got['shift'] != c['shift']:
+            if fm and got['shift'] != c['shift']:
                 problems.append('сдвиг')
-            if c['mode'] in FM_MODES and c['tone_mode'] == 3 and got['tone_mode'] != 3:
-                problems.append('DCS не сохраняется прошивкой — задайте с трансивера')
+            if got['split'] != c['split'] or (c['split'] and got['tx_freq'] != c['tx_freq']):
+                problems.append('частота передачи')
         return not problems, problems, got
 
     async def _write_all(self, c, chans):
@@ -309,9 +349,10 @@ class MemoryDesk:
         for c in chans:
             if c.get('empty'):
                 continue
-            tx = c['freq'] + (c['offset_khz'] * 1000 if c['shift'] == 1 else -c['offset_khz'] * 1000 if c['shift'] == 2 else 0)
+            tx = c['tx_freq'] if c.get('split') else \
+                c['freq'] + (c['offset_khz'] * 1000 if c['shift'] == 1 else -c['offset_khz'] * 1000 if c['shift'] == 2 else 0)
             w.writerow([c['ch'], c['group'], c['name'], '%.6f' % (c['freq'] / 1e6), c['mode'],
-                        ['Simplex', '+', '-'][c['shift']], c['offset_khz'], '%.6f' % (tx / 1e6),
+                        'Split' if c.get('split') else ['Simplex', '+', '-'][c['shift']], c['offset_khz'], '%.6f' % (tx / 1e6),
                         ['Off', 'Tone', 'TSQL', 'DCS'][c['tone_mode']], c['ctcss'], '%03d' % c['dcs'], c['clar'],
                         int(c['rx_clar']), int(c['tx_clar']), c['comment']])
         return f.getvalue()
@@ -328,6 +369,7 @@ class MemoryDesk:
                     c = {'ch': int(r.get('channel') or 0), 'group': r.get('group', ''), 'name': r.get('name', ''),
                          'freq': float(r['rx mhz']) * 1e6, 'mode': r.get('mode', 'FM'),
                          'shift': {'+': 1, '-': 2}.get(r.get('shift', ''), 0), 'offset_khz': float(r.get('offset khz') or 0),
+                         'split': r.get('shift', '').lower() == 'split', 'tx_freq': float(r.get('tx mhz') or 0) * 1e6,
                          'tone_mode': {'tone': 1, 'tsql': 2, 'dcs': 3}.get(r.get('tone mode', '').lower(), 0),
                          'ctcss': r.get('ctcss') or 88.5, 'dcs': int(r.get('dcs') or 23),
                          'clar': int(float(r.get('clarifier hz') or 0)), 'rx_clar': r.get('rx clar') == '1',
@@ -339,6 +381,8 @@ class MemoryDesk:
                     c = {'ch': int(r.get('location') or 0), 'name': r.get('name', ''),
                          'freq': float(r['frequency']) * 1e6, 'mode': mode,
                          'shift': {'+': 1, '-': 2}.get(r.get('duplex', ''), 0),
+                         'split': r.get('duplex', '') == 'split',
+                         'tx_freq': float(r.get('offset') or 0) * 1e6 if r.get('duplex', '') == 'split' else 0,
                          'offset_khz': float(r.get('offset') or 0) * 1000,
                          'tone_mode': {'Tone': 1, 'TSQL': 2, 'DTCS': 3}.get(tone, 0),
                          'ctcss': r.get('ctonefreq') if tone == 'TSQL' else r.get('rtonefreq') or 88.5,

@@ -93,13 +93,15 @@ class SimRadio:
             'CN01': '000', 'OS0': '0', 'TS': '0', 'AO': '050', 'AI': '0', 'MS': '00', 'DA': '10',
         }
         self.s.update({'CT1': '0', 'CN10': '000', 'CN11': '000', 'OS1': '0'})
+        self.s['CT0'] = '0'
         # память: канал -> поля как в MR (режим тона в кодировке MR: 1 TSQ, 2 ENC, 3 DCS)
         self.mem = {
-            1: {'f': 145500000, 'md': '4', 'ct': 0, 'tone': 12, 'dcs': 0, 'sh': 0, 'clar': 0, 'rx': 0, 'tx': 0, 'name': 'CALL 2M'},
-            2: {'f': 145650000, 'md': '4', 'ct': 2, 'tone': 8, 'dcs': 0, 'sh': 2, 'clar': 0, 'rx': 0, 'tx': 0, 'name': 'R1 GELEND'},
-            3: {'f': 433500000, 'md': '4', 'ct': 0, 'tone': 12, 'dcs': 0, 'sh': 0, 'clar': 0, 'rx': 0, 'tx': 0, 'name': 'CALL 70CM'},
-            5: {'f': 7074000, 'md': 'C', 'ct': 0, 'tone': 12, 'dcs': 0, 'sh': 0, 'clar': 0, 'rx': 0, 'tx': 0, 'name': 'FT8 40M'},
-            7: {'f': 14230000, 'md': '2', 'ct': 0, 'tone': 12, 'dcs': 0, 'sh': 0, 'clar': 50, 'rx': 1, 'tx': 0, 'name': 'SSTV 20M'},
+            1: {'f': 145500000, 'md': '4', 'ctm': 0, 'tone': 12, 'dcs': 0, 'sh': 0, 'clar': 0, 'rx': 0, 'tx': 0, 'name': 'Lybit 2m'},
+            2: {'f': 145650000, 'md': '4', 'ctm': 1, 'tone': 8, 'dcs': 0, 'sh': 2, 'clar': 0, 'rx': 0, 'tx': 0, 'name': 'R1 GELEND'},
+            3: {'f': 433500000, 'md': '4', 'ctm': 3, 'tone': 12, 'dcs': 5, 'sh': 0, 'clar': 0, 'rx': 0, 'tx': 0, 'name': 'DCS 70CM'},
+            5: {'f': 7074000, 'md': 'C', 'ctm': 0, 'tone': 12, 'dcs': 0, 'sh': 0, 'clar': 0, 'rx': 0, 'tx': 0, 'name': 'FT8 40M'},
+            7: {'f': 14230000, 'md': '2', 'ctm': 0, 'tone': 12, 'dcs': 0, 'sh': 0, 'clar': 50, 'rx': 1, 'tx': 0, 'name': 'SSTV 20M'},
+            100: {'f': 145625000, 'md': '4', 'ctm': 1, 'tone': 8, 'dcs': 0, 'sh': 2, 'clar': 0, 'rx': 0, 'tx': 0, 'name': 'Rep Kerch'},
         }
         self.cursor = {'0': 1, '1': 1}
         self.vm = 0
@@ -205,14 +207,27 @@ class SimRadio:
 
 
 def _sim_mem(self, cmd):
-    """Каналы памяти в симуляторе (форматы — как у FTX-1 по данным Hamlib)."""
+    """Каналы памяти в симуляторе — как ведёт себя FTX-1 (прошивка 1.13, проверено 13.11.2026)."""
+    CT2MR = {0: 0, 1: 2, 2: 1, 3: 0}            # режим CT -> поле MR (DCS в MR = 0)
     m = re.match(r'^MR(\d{5})$', cmd)
     if m:
         c = self.mem.get(int(m.group(1)))
         if not c:
             return '?;'
-        return 'MR%s%09d%s%04d%d%d%s%d%d00%d;' % (m.group(1), c['f'], '-' if c['clar'] < 0 else '+', abs(c['clar']),
-                                                  c['rx'], c['tx'], c['md'], 1, c['ct'], c['sh'])
+        return 'MR%s%09d%s%04d%d%d%s1%d00%d;' % (m.group(1), c['f'], '-' if c['clar'] < 0 else '+', abs(c['clar']),
+                                                 c['rx'], c['tx'], c['md'], CT2MR[c['ctm']], c['sh'])
+    m = re.match(r'^MW(\d{5})(\d{9})([+-])(\d{4})(\d)(\d)(\w)(\d)(\d)(\d\d)(\d)$', cmd)
+    if m:
+        ch, f, sg, off, rx, tx, md, p7, ct, _r, sh = m.groups()
+        if p7 != '1' or ct == '3':
+            return '?;'
+        ch = int(ch)
+        old = self.mem.get(ch, {'tone': 12, 'dcs': 0, 'name': '', 'split': 0, 'txf': int(f)})
+        self.mem[ch] = dict(old, f=int(f), md=md, clar=int(off) * (-1 if sg == '-' else 1), rx=int(rx), tx=int(tx),
+                            ctm={'0': 0, '1': 2, '2': 1}[ct], sh=int(sh))
+        return ''
+    if cmd.startswith('MW'):
+        return '?;'
     m = re.match(r'^MT(\d{5})(.*)$', cmd)
     if m:
         c = self.mem.get(int(m.group(1)))
@@ -221,7 +236,16 @@ def _sim_mem(self, cmd):
         if m.group(2):
             c['name'] = m.group(2)[:12].rstrip()
             return ''
-        return 'MT%s%-12s;' % (m.group(1), c['name'])
+        return 'MT%s%s;' % (m.group(1), c['name'])
+    m = re.match(r'^MZ(\d{5})(?:([01])(\d{9}))?$', cmd)
+    if m:
+        c = self.mem.get(int(m.group(1)))
+        if not c:
+            return '?;'
+        if m.group(2):
+            c['split'], c['txf'] = int(m.group(2)), int(m.group(3))
+            return ''
+        return 'MZ%s%d%09d;' % (m.group(1), c.get('split', 0), c.get('txf', c['f']))
     m = re.match(r'^MC([01])(\d{5})$', cmd)
     if m:
         side, ch = m.group(1), int(m.group(2))
@@ -231,7 +255,8 @@ def _sim_mem(self, cmd):
             return '?;'
         if side == '0':
             self.vm = 1
-            self.s.update(FA='%09d' % c['f'], MD0=c['md'], CN00='%03d' % c['tone'], CN01='%03d' % c['dcs'])
+            self.s.update(FA='%09d' % c['f'], MD0=c['md'], CT0=str(c['ctm']), CN00='%03d' % c['tone'],
+                          CN01='%03d' % c['dcs'], OS0=str(c['sh']))
         return ''
     if cmd in ('MC0', 'MC1'):
         return 'MC%s%05d;' % (cmd[2], self.cursor[cmd[2]])
@@ -240,25 +265,13 @@ def _sim_mem(self, cmd):
     if cmd == 'VM000':
         self.vm = 0
         return ''
-    m = re.match(r'^CF10([01])(.)(\d{4})$', cmd)
-    if m:
-        if m.group(1) == '0':
-            k = {'0': ('rx', 0), '1': ('rx', 1), '2': ('tx', 0), '3': ('tx', 1)}.get(m.group(2))
-            if k:
-                self.cf1[k[0]] = k[1]
-        else:
-            self.cf1['off'] = int(m.group(3)) * (-1 if m.group(2) == '-' else 1)
+    if cmd == 'AM':
+        ch = self.cursor['0']
+        old = self.mem.get(ch, {})
+        self.mem[ch] = {'f': int(self.s['FA']), 'md': self.s['MD0'], 'ctm': int(self.s['CT0']),
+                        'tone': int(self.s['CN00']), 'dcs': int(self.s['CN01']), 'sh': int(self.s['OS0']),
+                        'clar': 0, 'rx': 0, 'tx': 0, 'name': '', 'split': old.get('split', 0), 'txf': old.get('txf', 0)}
         return ''
-    if cmd == 'BM':
-        ct = {'0': 0, '1': 2, '2': 1, '3': 0}[self.s['CT1']]       # CT -> кодировка памяти; DCS прошивка не сохраняет
-        old = self.mem.get(self.cursor['1'], {})
-        self.mem[self.cursor['1']] = {'f': int(self.s['FB']), 'md': self.s['MD1'], 'ct': ct, 'tone': int(self.s['CN10']),
-                                      'dcs': int(self.s['CN11']), 'sh': int(self.s['OS1']), 'clar': self.cf1['off'],
-                                      'rx': self.cf1['rx'], 'tx': 0, 'name': old.get('name', '')}
-        self.vm = 0
-        return ''
-    if cmd.startswith('MW'):
-        return '?;'
     return None
 
 

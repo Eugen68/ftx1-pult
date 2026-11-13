@@ -574,3 +574,4 @@ body.me-open { overflow: hidden; }
   .me-note { display: none; }
 }
 .me-tools .btn { padding: 6px 10px; min-height: 32px; } .me-tools select { height: 32px; }
+.me-table .fq.tx { color: #ffb4a8; }
