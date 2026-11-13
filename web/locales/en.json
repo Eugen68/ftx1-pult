@@ -1229,5 +1229,8 @@
   "Скорость, WPM": "Speed, WPM",
   "Тон CW": "CW pitch",
   "Электронный ключ": "Electronic keyer",
-  "Задержка BK": "BK delay"
+  "Задержка BK": "BK delay",
+  "⏻ Выйти": "⏻ Exit",
+  "Кнопка X закрывает только окно. Чтобы остановить сервер, нажмите «Выйти».": "The X button closes only this window. To stop the server, click Exit.",
+  "Сервер остановлен — после запуска обновите страницу": "Server stopped — reload this page after restarting it"
 }

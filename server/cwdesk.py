@@ -8,6 +8,7 @@ CW-стол: декодер + ИИ + передача + автоответ. Жи
      -> ИИ составляет ответ -> отсчёт N секунд (можно отменить) -> передача.
 """
 
+from background import network_call
 from i18n import tr
 import asyncio
 import logging
@@ -167,7 +168,7 @@ class CwDesk:
             self.ai_busy = True
             self.bc({'t': 'cw_ai_busy', 'on': True, 'what': tr('Разбираю принятое…')})
             try:
-                res = await asyncio.to_thread(ai.analyze, self.lm(), item['text'], hist, self.op())
+                res = await network_call(ai.analyze, self.lm(), item['text'], hist, self.op())
             except Exception as e:
                 if not isinstance(e, ai.AiError):
                     log.exception(tr("ИИ: ошибка разбора"))
@@ -207,7 +208,7 @@ class CwDesk:
             self.ai_busy = True
             self.bc({'t': 'cw_ai_busy', 'on': True, 'what': tr('Составляю ответ…')})
             try:
-                res = await asyncio.to_thread(ai.reply, self.lm(), self.history, self.analysis, self.op(), task)
+                res = await network_call(ai.reply, self.lm(), self.history, self.analysis, self.op(), task)
             except Exception as e:
                 if not isinstance(e, ai.AiError):
                     log.exception(tr("ИИ: ошибка ответа"))
@@ -285,6 +286,11 @@ class CwDesk:
     def stop(self):
         self.sender.stop()
         self.cancel_proposal()
+        for client in self.st.clients:
+            client.cw_auto = False
+        for task in tuple(getattr(self, '_tasks', ())):
+            if not task.cancelling():
+                task.cancel()
 
     # ------------------------------------------------------------------ сообщения пульта
     async def on_msg(self, c, m):
@@ -359,14 +365,14 @@ class CwDesk:
 
     async def _ai_test(self, c):
         try:
-            models = await asyncio.to_thread(self.lm().models)
+            models = await network_call(self.lm().models)
             c.ws.send_json({'t': 'cw_ai_test', 'ok': True, 'models': models, 'model': self.cfg.get('ai_model')})
         except ai.AiError as e:
             c.ws.send_json({'t': 'cw_ai_test', 'ok': False, 'msg': str(e)})
 
     def _bg(self, coro):
         """ИИ отвечает долго — не держим ни защиту PTT, ни команды пульта."""
-        task = asyncio.ensure_future(coro)
+        task = self.st.spawn(coro)
         self._tasks = getattr(self, '_tasks', set())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)

@@ -11,6 +11,7 @@ FTX-1 Пульт — сервер удалённого управления Yaes
     --console      журнал в консоль
 """
 
+from background import network_call
 from i18n import tr, configure, language, LANGUAGES
 import argparse
 import asyncio
@@ -49,7 +50,7 @@ from recorder import QsoRecorder  # noqa: E402
 from ft8 import Ft8Desk  # noqa: E402
 from memory import MemoryDesk  # noqa: E402
 
-VERSION = "2.10"
+VERSION = "2.10.1"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -310,6 +311,10 @@ class Station:
         self.ptt_alive = 0.0
         self.loop = None
         self.quit_event = None
+        self.shutting_down = False
+        self._background = set()
+        self._shutdown_task = None
+        self._radio_stop_lock = asyncio.Lock()
         self.https_ok = False
         self.tray = None
         self.ports_cache, self.audio_cache = [], []
@@ -333,15 +338,64 @@ class Station:
     def sim(self):
         return self.force_sim or bool(self.cfg.get('simulate'))
 
+    def spawn(self, coroutine):
+        task = asyncio.create_task(coroutine)
+        self._background.add(task)
+        def finished(done):
+            self._background.discard(done)
+            if not done.cancelled():
+                error = done.exception()
+                if error is not None:
+                    log.error("%s", error, exc_info=(type(error), error, error.__traceback__))
+        task.add_done_callback(finished)
+        if self.shutting_down:
+            task.cancel()
+        return task
+
+    def request_shutdown(self):
+        if self.shutting_down:
+            return
+        self.shutting_down = True
+        log.info(tr('Выход из программы'))
+        self.broadcast({'t': 'server_stopping'})
+        if self.quit_event is not None:
+            self.quit_event.set()
+
+    async def shutdown(self):
+        if self._shutdown_task is None:
+            self._shutdown_task = asyncio.create_task(self._shutdown())
+        await asyncio.shield(self._shutdown_task)
+
+    async def _shutdown(self):
+        self.request_shutdown()
+        try:
+            await self.stop_radio()
+        finally:
+            tasks = tuple(self._background)
+            for task in tasks:
+                if not task.done() and not task.cancelling():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            clients = tuple(self.clients)
+            if clients:
+                await asyncio.gather(*(client.ws.close() for client in clients), return_exceptions=True)
+            if self._on_log in LOGBUF.listeners:
+                LOGBUF.listeners.remove(self._on_log)
+            for obj, name in ((self.ft.udp, 'sock'), (self.ft.psk, 'sock')):
+                sock = getattr(obj, name, None)
+                if sock is not None:
+                    sock.close()
+
     async def init(self):
         self.loop = asyncio.get_running_loop()
         self.quit_event = asyncio.Event()
-        asyncio.create_task(self._watchdog())
-        asyncio.create_task(self._admin_loop())
+        self.spawn(self._watchdog())
+        self.spawn(self._admin_loop())
 
     # ----- запуск/остановка связи с трансивером
     async def start_radio(self):
-        if self.running or self.busy:
+        if self.running or self.busy or self.shutting_down:
             return
         self.busy = True
         self.last_error = ''
@@ -391,32 +445,47 @@ class Station:
             self.push_status()
 
     async def stop_radio(self):
-        if not self.running:
-            return
-        self.cw.stop()
-        self.digi.stop()
-        self.vk.stop()
-        self.ft.stop()
-        if self.rec.on:
-            self.rec.stop()
-            self.broadcast(self.rec_state())
-        if self.ptt_owner:
-            self.set_ptt(None, False)
-            await asyncio.sleep(0.15)
-        try:
-            self.rig.close()
-        except Exception:
-            pass
-        try:
-            self.audio.stop()
-        except Exception:
-            pass
-        self.rig = self.audio = None
-        self.running = False
-        log.info(tr("Связь с трансивером остановлена"))
-        self.broadcast({'t': 'state', 's': {'connected': False}})
-        self.broadcast({'t': 'audio_status', 'err': tr('Связь с трансивером остановлена')})
-        self.push_status()
+        async with self._radio_stop_lock:
+            was_running = self.running or self.rig is not None or self.audio is not None
+            tasks = [self.digi.tx_task, self.vk.task, self.ft.task, self.ft.tx_task,
+                     self.ft.tune, self.mem.task, *getattr(self.cw, '_tasks', ())]
+            self.cw.stop()
+            self.digi.stop()
+            self.vk.stop()
+            self.ft.stop()
+            self.mem.stop_flag = True
+            tasks = [task for task in tasks if task is not None and task is not asyncio.current_task()]
+            for task in tasks:
+                if not task.done() and not task.cancelling():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            # The CW daemon thread also needs a chance to drop its keying line.
+            deadline = time.monotonic() + 1
+            while self.cw.sender.busy and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            if self.rec.on:
+                try:
+                    self.rec.stop()
+                    self.broadcast(self.rec_state())
+                except Exception as error:
+                    log.error("%s", error)
+            if self.ptt_owner:
+                self.set_ptt(None, False)
+            try:
+                if self.rig:
+                    self.rig.close()
+            finally:
+                if self.audio:
+                    self.audio.stop()
+                self.rig = self.audio = None
+                self.running = False
+                self.ptt_owner = None
+            if was_running:
+                log.info(tr('Связь с трансивером остановлена'))
+                self.broadcast({'t': 'state', 's': {'connected': False}})
+                self.broadcast({'t': 'audio_status', 'err': tr('Связь с трансивером остановлена')})
+                self.push_status()
 
     def _rx_from_thread(self, x):
         try:
@@ -426,6 +495,8 @@ class Station:
 
     # ----- приём звука: раздаём клиентам и строим водопад
     def _on_rx_audio(self, x):
+        if self.shutting_down:
+            return
         self.rec.feed_rx(x)
         need = {c.rate for c in self.clients if c.audio and c.authed}
         for rate in need:
@@ -664,22 +735,35 @@ class Station:
                 log.error(tr("Не удалось изменить автозапуск: %s"), e)
             c.ws.send_json({'t': 'admin_autostart', 'on': v})
         elif t == 'admin_ai':
-            import ai as ai_mod
-            lm = ai_mod.LmStudio(self.cfg.get('ai_url'), '')
-            try:
-                models = await asyncio.to_thread(lm.models)
-                c.ws.send_json({'t': 'admin_ai', 'ok': True, 'models': models})
-            except ai_mod.AiError as e:
-                c.ws.send_json({'t': 'admin_ai', 'ok': False, 'msg': str(e), 'models': []})
+            previous = getattr(c, 'ai_task', None)
+            if previous and not previous.done():
+                previous.cancel()
+            c.ai_task = self.spawn(self._admin_ai(c))
         elif t == 'admin_open_pult':
             webbrowser.open('http://localhost:%d/' % self.cfg['http_port'])
         elif t == 'admin_open_folder':
             if IS_WIN:
                 os.startfile(BASE)
         elif t == 'admin_quit':
-            log.info(tr("Выход из программы"))
-            await self.stop_radio()
-            self.quit_event.set()
+            if m.get('cfg') is not None:
+                updated = dict(self.cfg)
+                updated.update({k: v for k, v in m['cfg'].items() if k in DEFAULT_CFG and k != 'language'})
+                try:
+                    save_cfg(updated)
+                except OSError as error:
+                    c.ws.send_json({'t': 'admin_quit_failed', 'msg': tr('Не удалось сохранить настройки: %s') % error})
+                    return
+                self.cfg.update(updated)
+            self.request_shutdown()
+
+    async def _admin_ai(self, client):
+        import ai as ai_mod
+        lm = ai_mod.LmStudio(self.cfg.get('ai_url'), '')
+        try:
+            models = await network_call(lm.models)
+            client.ws.send_json({'t': 'admin_ai', 'ok': True, 'models': models})
+        except ai_mod.AiError as error:
+            client.ws.send_json({'t': 'admin_ai', 'ok': False, 'msg': str(error), 'models': []})
 
     # ----- клиент пульта
     async def handle_ws(self, ws):
@@ -729,6 +813,10 @@ class Station:
 
     async def _on_msg(self, c, m):
         t = m.get('t', '')
+        if self.shutting_down:
+            if c.authed:
+                c.ws.send_json({'t': 'server_stopping'})
+            return
         if t.startswith('admin_'):
             if c.local:
                 await self._admin_msg(c, m)
@@ -897,7 +985,7 @@ def start_tray(station, panel_url, pult_url):
         loop = station.loop
 
         def quit_app(icon, item):
-            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(station._admin_msg_quit()))
+            loop.call_soon_threadsafe(station.request_shutdown)
 
         menu = pystray.Menu(
             pystray.MenuItem(lambda item: tr('Панель управления'), lambda i, it: open_window(panel_url), default=True),
@@ -912,12 +1000,6 @@ def start_tray(station, panel_url, pult_url):
     except Exception as e:
         log.debug(tr("Трей недоступен: %s"), e)
         return None
-
-
-async def _quit(station):
-    await station.stop_radio()
-    station.quit_event.set()
-Station._admin_msg_quit = lambda self: _quit(self)
 
 
 def web_dir():
@@ -959,55 +1041,67 @@ async def amain(args):
     st = Station(cfg, force_sim=args.sim)
     await st.init()
 
-    app = WebServer(web_dir(), st.handle_ws, {'/api/ping': lambda: ('text/plain', b'FTX1-PULT ' + VERSION.encode()),
-                                            '/api/language': lambda: ('application/json', json.dumps({'language': language()}).encode()),
-                                            '/manifest.webmanifest': st.manifest},
-                    {'/rec/': st.rec_download})
-    servers = []
-    http_host = '0.0.0.0' if cfg.get('http_lan') else '127.0.0.1'
+    servers, tasks, icon, app = [], [], None, None
     try:
-        servers.append(await asyncio.start_server(app.handle, http_host, cfg['http_port']))
-    except OSError as e:
-        message_box(tr("Не удалось занять порт %d: %s\n\nЕго использует другая программа. Смените http_port в config.json.")
-                    % (cfg['http_port'], e))
-        return
-    crt, key = ensure_cert()
-    if crt:
+        app = WebServer(web_dir(), st.handle_ws, {'/api/ping': lambda: ('text/plain', b'FTX1-PULT ' + VERSION.encode()),
+                                                '/api/language': lambda: ('application/json', json.dumps({'language': language()}).encode()),
+                                                '/manifest.webmanifest': st.manifest},
+                        {'/rec/': st.rec_download})
+        http_host = '0.0.0.0' if cfg.get('http_lan') else '127.0.0.1'
         try:
-            ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-            ctx.load_cert_chain(crt, key)
-            servers.append(await asyncio.start_server(app.handle, '0.0.0.0', cfg['https_port'], ssl=ctx))
-            st.https_ok = True
+            servers.append(await asyncio.start_server(app.handle, http_host, cfg['http_port']))
         except OSError as e:
-            log.error(tr("HTTPS-порт %d занят (%s) — вход с телефона недоступен"), cfg['https_port'], e)
+            message_box(tr("Не удалось занять порт %d: %s\n\nЕго использует другая программа. Смените http_port в config.json.")
+                        % (cfg['http_port'], e))
+            return
+        crt, key = ensure_cert()
+        if crt:
+            try:
+                ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+                ctx.load_cert_chain(crt, key)
+                servers.append(await asyncio.start_server(app.handle, '0.0.0.0', cfg['https_port'], ssl=ctx))
+                st.https_ok = True
+            except OSError as e:
+                log.error(tr("HTTPS-порт %d занят (%s) — вход с телефона недоступен"), cfg['https_port'], e)
 
-    panel_url = 'http://localhost:%d/panel.html' % cfg['http_port']
-    pult_url = 'http://localhost:%d/' % cfg['http_port']
-    log.info(tr("%s %s запущен. Панель: %s"), tr(APP_NAME), VERSION, panel_url)
+        panel_url = 'http://localhost:%d/panel.html' % cfg['http_port']
+        pult_url = 'http://localhost:%d/' % cfg['http_port']
+        log.info(tr("%s %s запущен. Панель: %s"), tr(APP_NAME), VERSION, panel_url)
 
-    first_run = not os.path.exists(cfg_path())
-    if (cfg.get('auto_connect') and not first_run) or args.sim:
-        asyncio.create_task(st.start_radio())
-    if not args.background:
-        if cfg.get('open_panel', True) or first_run:
-            open_window(panel_url, (1280, 820))
-        if cfg.get('open_pult') and not first_run:
-            open_window(pult_url, (1400, 900))
-    icon = start_tray(st, panel_url, pult_url)
-    if icon is None and args.background is False and not find_app_browser():
-        log.info(tr("Совет: установите pystray и Pillow, чтобы получить значок в трее"))
+        first_run = not os.path.exists(cfg_path())
+        if (cfg.get('auto_connect') and not first_run) or args.sim:
+            st.spawn(st.start_radio())
+        if not args.background:
+            if cfg.get('open_panel', True) or first_run:
+                open_window(panel_url, (1280, 820))
+            if cfg.get('open_pult') and not first_run:
+                open_window(pult_url, (1400, 900))
+        icon = start_tray(st, panel_url, pult_url)
+        if icon is None and args.background is False and not find_app_browser():
+            log.info(tr("Совет: установите pystray и Pillow, чтобы получить значок в трее"))
 
-    tasks = [asyncio.create_task(s.serve_forever()) for s in servers]
-    await st.quit_event.wait()
-    for s in servers:
-        s.close()
-    for t in tasks:
-        t.cancel()
-    if icon:
+        tasks = [asyncio.create_task(server.serve_forever()) for server in servers]
+        await st.quit_event.wait()
+    finally:
+        st.request_shutdown()
+        for server in servers:
+            server.close()
+        for task in tasks:
+            task.cancel()
         try:
-            icon.stop()
-        except Exception:
-            pass
+            await st.shutdown()
+        finally:
+            if app is not None:
+                await app.close()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if servers:
+                await asyncio.gather(*(server.wait_closed() for server in servers), return_exceptions=True)
+            if icon:
+                try:
+                    icon.stop()
+                except Exception:
+                    pass
 
 
 def selftest(path):

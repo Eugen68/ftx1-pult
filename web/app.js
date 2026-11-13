@@ -101,14 +101,18 @@ function connect() {
   C.ws = ws;
   ws.onopen = () => send({ t: 'hello', pw: C.pw, rate: C.rate || 16000 });
   ws.onclose = () => {
-    C.authed = false; setLink(false, I18n.t('нет связи с сервером'));
+    C.authed = false; setLink(false, C.shuttingDown ? I18n.t('Сервер остановлен — после запуска обновите страницу') : I18n.t('нет связи с сервером'));
     if (C.txOwner) { C.txOwner = false; updatePtt(); }
-    setTimeout(connect, 2000);
+    if (!C.shuttingDown) setTimeout(connect, 2000);
   };
   ws.onmessage = (e) => {
     if (typeof e.data !== 'string') return onBinary(new Uint8Array(e.data));
     const m = JSON.parse(e.data);
     switch (m.t) {
+      case 'server_stopping':
+        C.shuttingDown = true;
+        C.ws.close();
+        break;
       case 'language': I18n.sync(m.language); break;
       case 'language_error': $('#language').value = m.language; toast(m.msg, 5000); break;
       case 'hello_ok':

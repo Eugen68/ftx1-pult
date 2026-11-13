@@ -169,6 +169,7 @@ class Ft8Desk:
         self.tries = 0
         self.busy = False                       # идёт передача
         self.task = None
+        self.tx_task = None
         self.decodes = []                       # последние декоды (для нового подключения)
         self.qsos = []                          # лог текущего сеанса
         self.last_slot = None
@@ -251,7 +252,7 @@ class Ft8Desk:
             self.buf = np.zeros(0, np.float32)
         self.enabled = on
         if on and not self.task and _ftx:
-            self.task = asyncio.create_task(self._loop())
+            self.task = self.st.spawn(self._loop())
         if _ftx and self.my_call():
             _ftx.remember(self.my_call())
 
@@ -292,14 +293,14 @@ class Ft8Desk:
                 # 1) декодирование прошлого слота
                 if t_in >= m['decode_at'] and self.last_slot != k:
                     self.last_slot = k
-                    asyncio.create_task(self._decode_slot(k * m['slot'], k))
+                    self.st.spawn(self._decode_slot(k * m['slot'], k))
                 # 2) передача в своём слоте: в начале слота или с опозданием (ответ декодировался поздно)
                 for kk in (k, k + 1):
                     t_s = kk * m['slot']
                     if self.tx_enable and self.tx_msg and not self.busy and (kk % 2) == self.tx_par \
                             and self.tx_slot != kk and -0.3 < now - t_s < m['late']:
                         self.tx_slot = kk
-                        asyncio.create_task(self._transmit(t_s, self.tx_msg))
+                        self.tx_task = self.st.spawn(self._transmit(t_s, self.tx_msg))
                 # 3) полоса DATA-U: по умолчанию у трансивера 500 Гц — для FT8 нужна 3000 Гц
                 self._check_width(now)
                 # 4) PSK Reporter: пачка принятых раз в ~5 мин; «где меня слышат» — пока передаём
@@ -770,7 +771,7 @@ class Ft8Desk:
                 if why:
                     c.ws.send_json({'t': 'ft_note', 'msg': why})
                 else:
-                    self.tune = asyncio.create_task(self._tune())
+                    self.tune = self.st.spawn(self._tune())
             elif not m.get('on') and self.tune:
                 self.tune.cancel()
         elif t == 'ft_auto_cq':
@@ -807,6 +808,7 @@ class Ft8Desk:
 
     def stop(self):
         self.tx_enable = False
-        if self.tune:
-            self.tune.cancel()
         self.enabled = False
+        for task in (self.task, self.tx_task, self.tune):
+            if task and not task.cancelling():
+                task.cancel()

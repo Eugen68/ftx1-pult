@@ -44,3 +44,9 @@ npm test --prefix tests/web
 The frontend checks execute the actual application scripts in a DOM environment with mocked canvas and WebSocket APIs. They cover English/Russian startup, static controls and tooltips, dynamic message catalogue coverage, storage failures and radio/user text preservation. Python checks cover formatting, model prompts, persistence, authentication, failed saves, language notifications and transmission guards.
 
 Validate the final Windows executable and hardware behavior on a real FTX-1 before general release.
+
+## Closing the application (2.10.1)
+
+The window X button closes the panel and keeps the server in the system tray. Use the **Exit** button at the top or bottom of the server panel, or **Exit** in the tray menu, to stop the application completely. Pending panel settings are saved before Exit; if saving fails, the panel stays open and reports the error.
+
+Shutdown cancels radio jobs while their handles are still available, releases PTT, closes client connections and listeners, and removes the tray icon. A pending LM Studio response no longer holds the process open. The Windows build checks Exit during a deliberately blocked model request, settings persistence and restart on the same port; its result is included as `lifecycle.txt`.

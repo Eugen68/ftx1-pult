@@ -21,6 +21,15 @@ function connect() {
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     switch (m.t) {
+      case 'server_stopping':
+        quitting = true;
+        $('#gone').classList.remove('hidden');
+        break;
+      case 'admin_quit_failed':
+        quitting = false;
+        $('#btnQuit').disabled = $('#btnQuitTop').disabled = false;
+        toast(m.msg, 6000);
+        break;
       case 'language': I18n.sync(m.language); break;
       case 'language_error': $('#language').value = m.language; toast(m.msg, 5000); break;
       case 'admin_denied':
@@ -199,10 +208,16 @@ $('#btnRun').onclick = () => {
 };
 $('#btnPult').onclick = () => send({ t: 'admin_open_pult' });
 $('#btnFolder').onclick = () => send({ t: 'admin_open_folder' });
-$('#btnQuit').onclick = () => {
+function quitApp() {
+  if (quitting) return;
+  if (!ws || ws.readyState !== 1) return toast(I18n.t('Нет связи с сервером'));
   if (!confirm(I18n.t('Выйти из программы? Связь с трансивером будет остановлена, пульты отключатся.'))) return;
-  quitting = true; send({ t: 'admin_quit' });
-};
+  clearTimeout(saveT);
+  quitting = true;
+  $('#btnQuit').disabled = $('#btnQuitTop').disabled = true;
+  send({ t: 'admin_quit', cfg: collect() });
+}
+$('#btnQuit').onclick = $('#btnQuitTop').onclick = quitApp;
 
 // ------------------------------------------------------------ состояние
 function setLamp(cls, title, sub) {

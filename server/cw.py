@@ -491,7 +491,8 @@ class CwSender:
                     rest = t - time.perf_counter()
                     if rest <= 0:
                         break
-                    time.sleep(rest - 0.002 if rest > 0.003 else 0)
+                    if self._stop.wait(rest - 0.002 if rest > 0.003 else 0):
+                        break
                 if time.perf_counter() - last_ev > 0.15:
                     last_ev = time.perf_counter()
                     self.on_event({'t': 'cw_tx_progress', 'pos': pos_map[min(i, len(pos_map) - 1)] if pos_map else 0})

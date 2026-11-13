@@ -56,26 +56,8 @@ jobs:
           $p = Start-Process dist\FTX1-Pult.exe -ArgumentList '--selftest','selftest.txt' -Wait -PassThru
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { exit 1 }
-      - name: Проверка запуска сервера (симулятор)
-        shell: pwsh
-        run: |
-          '{"open_panel": false, "auto_connect": true, "language": "en"}' | Set-Content dist\config.json
-          $p = Start-Process dist\FTX1-Pult.exe -ArgumentList '--sim','--background' -PassThru
-          Start-Sleep -Seconds 12
-          $ping = (Invoke-WebRequest http://127.0.0.1:8080/api/ping -UseBasicParsing).Content
-          $panel = (Invoke-WebRequest http://127.0.0.1:8080/panel.html -UseBasicParsing).StatusCode
-          $pult = (Invoke-WebRequest http://127.0.0.1:8080/ -UseBasicParsing).StatusCode
-          $language = (Invoke-RestMethod http://127.0.0.1:8080/api/language).language
-          $manifestLanguage = (Invoke-RestMethod http://127.0.0.1:8080/manifest.webmanifest).lang
-          $catalogue = (Invoke-WebRequest http://127.0.0.1:8080/locales/en.json -UseBasicParsing).StatusCode
-          $localeScript = (Invoke-WebRequest http://127.0.0.1:8080/i18n.js -UseBasicParsing).StatusCode
-          "ping: $ping  panel: $panel  pult: $pult  language: $language  manifest: $manifestLanguage"
-          if ($language -ne 'en' -or $manifestLanguage -ne 'en' -or $catalogue -ne 200 -or $localeScript -ne 200) { exit 1 }
-          Get-Content dist\ftx1-pult.log
-          Stop-Process -Id $p.Id -Force
-          Remove-Item dist\config.json, dist\cert.pem, dist\key.pem, dist\ftx1-pult.log -ErrorAction SilentlyContinue
-          if (-not $ping.StartsWith('FTX1') -or $panel -ne 200 -or $pult -ne 200) { exit 1 }
-          if (Select-String -Path selftest.txt -Pattern 'FAIL' -Quiet) { exit 1 }
+      - name: Packaged Windows startup, Exit and restart
+        run: python .github/scripts/check_lifecycle.py dist/FTX1-Pult.exe
       - uses: actions/upload-artifact@v4
         with:
           name: FTX1-Pult
@@ -83,6 +65,7 @@ jobs:
             dist/FTX1-Pult.exe
             dist/FTX1-Pult-folder.zip
             dist/SHA256.txt
+            dist/lifecycle.txt
             selftest.txt
             LANGUAGES.md
       - name: Релиз «последняя сборка»

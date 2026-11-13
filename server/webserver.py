@@ -25,6 +25,7 @@ class WebSocket:
     def __init__(self, reader, writer, peer):
         self.r, self.w, self.peer = reader, writer, peer
         self.closed = False
+        self._close_task = None
         self.q = asyncio.Queue(maxsize=120)
         self._sender = asyncio.create_task(self._send_loop())
 
@@ -58,6 +59,7 @@ class WebSocket:
                 # выкидываем самый старый кадр (обычно звук/водопад), служебное — важнее
                 try:
                     self.q.get_nowait()
+                    self.q.task_done()
                     self.q.put_nowait(data)
                 except Exception:
                     pass
@@ -67,8 +69,11 @@ class WebSocket:
         try:
             while True:
                 data = await self.q.get()
-                self.w.write(data)
-                await self.w.drain()
+                try:
+                    self.w.write(data)
+                    await self.w.drain()
+                finally:
+                    self.q.task_done()
         except Exception:
             self.closed = True
 
@@ -114,13 +119,32 @@ class WebSocket:
                 return 'bin', msg
 
     async def close(self):
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._close())
+        await asyncio.shield(self._close_task)
+
+    async def _close(self):
         self.closed = True
         try:
+            # Deliver the shutdown notice, but never wait indefinitely for a
+            # disconnected/slow client. Media data may be discarded on exit.
+            if not self._sender.done():
+                try:
+                    await asyncio.wait_for(self.q.join(), 0.25)
+                except asyncio.TimeoutError:
+                    pass
             self._sender.cancel()
+            await asyncio.gather(self._sender, return_exceptions=True)
             self.w.write(self._frame(8, b''))
-            self.w.close()
-        except Exception:
+            await asyncio.wait_for(self.w.drain(), 0.25)
+        except (Exception, asyncio.CancelledError):
             pass
+        finally:
+            self.w.close()
+            try:
+                await asyncio.wait_for(self.w.wait_closed(), 0.5)
+            except Exception:
+                pass
 
 
 class WebServer:
@@ -128,9 +152,19 @@ class WebServer:
         self.static_dir = os.path.abspath(static_dir)
         self.ws_handler = ws_handler          # async fn(WebSocket)
         self.routes = extra_routes or {}      # path -> fn() -> (ctype, bytes)
+        self.handlers = set()
         self.prefix = prefix_routes or {}     # '/rec/' -> fn(остаток, query) -> (ctype, bytes) | None
 
+    async def close(self):
+        handlers = tuple(self.handlers)
+        for task in handlers:
+            task.cancel()
+        if handlers:
+            await asyncio.gather(*handlers, return_exceptions=True)
+
     async def handle(self, reader, writer):
+        task = asyncio.current_task()
+        self.handlers.add(task)
         peer = writer.get_extra_info('peername')
         try:
             line = await asyncio.wait_for(reader.readline(), 15)
@@ -191,6 +225,7 @@ class WebServer:
         except Exception as e:
             log.debug(tr("HTTP ошибка %s: %s"), peer, e)
         finally:
+            self.handlers.discard(task)
             try:
                 writer.close()
             except Exception:

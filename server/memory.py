@@ -413,7 +413,7 @@ class MemoryDesk:
             b = max(a, min(CH_MAX, int(m.get('to', CH_MAX))))
             rng = list(range(a, b + 1)) + (list(PMS) if m.get('pms') else [])
             self.stop_flag = False
-            self.task = asyncio.create_task(self._read_all(c, rng, bool(m.get('tones', True))))
+            self.task = self.st.spawn(self._read_all(c, rng, bool(m.get('tones', True))))
         elif t == 'mem_write':
             if self.task:
                 return c.ws.send_json({'t': 'mem_err', 'msg': tr('Уже идёт чтение или запись')})
@@ -423,7 +423,7 @@ class MemoryDesk:
             chans = [clean(x) for x in (m.get('chans') or [])]
             chans = [x for x in chans if CH_MIN <= x['ch'] <= CH_MAX or x['ch'] in PMS]
             self.stop_flag = False
-            self.task = asyncio.create_task(self._write_all(c, chans))
+            self.task = self.st.spawn(self._write_all(c, chans))
         elif t == 'mem_stop':
             self.stop_flag = True
         elif t == 'mem_recall':                   # перейти на канал на трансивере

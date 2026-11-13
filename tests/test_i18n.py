@@ -30,6 +30,7 @@ def station():
     st = main.Station.__new__(main.Station)
     st.cfg = dict(main.DEFAULT_CFG)
     st.busy = False
+    st.shutting_down = False
     st.rig = SimpleNamespace(state={})
     st.ptt_owner = None
     st.cw = SimpleNamespace(sender=SimpleNamespace(busy=False), proposal=None,

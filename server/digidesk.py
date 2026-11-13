@@ -17,6 +17,7 @@
                 0x06 = вся текущая картинка: '<HH' (строк, ширина) + uint8[строк*ширина].
 """
 
+from background import network_call
 from i18n import tr
 import asyncio
 import logging
@@ -215,7 +216,7 @@ class DigiDesk:
         dur = len(x) / SR
         if dur > self.cfg.get('max_tx_seconds', 180):
             return self._tx_fail(c, tr('Слишком длинный текст: %.0f с передачи') % dur)
-        self.tx_task = asyncio.create_task(self._tx_run(x, text, 'rt', SR / self.rtty.baud * 7.5, 0.4))
+        self.tx_task = self.st.spawn(self._tx_run(x, text, 'rt', SR / self.rtty.baud * 7.5, 0.4))
 
     async def send_psk(self, c, text):
         text = (text or '')[:2000]
@@ -232,7 +233,7 @@ class DigiDesk:
         x = psk31_tx(text, fc=self.psk.fc, amp=0.5)
         if len(x) / SR > self.cfg.get('max_tx_seconds', 180):
             return fail(tr('Слишком длинный текст'))
-        self.tx_task = asyncio.create_task(self._tx_run(x, text, 'psk', SR / 31.25 * 9, 32 / 31.25))
+        self.tx_task = self.st.spawn(self._tx_run(x, text, 'psk', SR / 31.25 * 9, 32 / 31.25))
 
     async def _tx_run(self, x, text, pre, per_char, lead_s):
         st, tx = self.st, self.st.audio.tx
@@ -315,7 +316,7 @@ class DigiDesk:
         elif t == 'rt_stop':
             self.stop()
         elif t in ('rt_ai', 'nx_ai'):
-            asyncio.create_task(self._translate(c, m.get('text', ''), t[:2]))
+            self.st.spawn(self._translate(c, m.get('text', ''), t[:2]))
         elif t == 'nx_dec':
             c.nx_on = bool(m.get('on'))
             if m.get('fc'):
@@ -379,7 +380,7 @@ class DigiDesk:
                  'и кратко объясни смысл: синоптические коды, сокращения, координаты. Не выдумывай. '
                  'Ответ — JSON {"ru": "..."}'))
         try:
-            res, model = await asyncio.to_thread(lm.chat_json, sys_p, text,
+            res, model = await network_call(lm.chat_json, sys_p, text,
                                                  {'type': 'object', 'properties': {'ru': {'type': 'string'}},
                                                   'required': ['ru'], 'additionalProperties': False}, 0.2, 900)
             c.ws.send_json({'t': pre + '_ai', 'ru': str(res.get('ru', '')), 'model': model})

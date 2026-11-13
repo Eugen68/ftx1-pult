@@ -113,3 +113,28 @@ test('unavailable language API falls back to Russian and still starts', async ()
   try { assert.equal(dom.window.document.documentElement.lang, 'ru'); assert.deepEqual(errors, []); }
   finally { dom.window.close(); }
 });
+test('top Exit saves current controls and recovers if the server cannot save', async () => {
+  const { dom, sent, message } = await open('panel.html', 'en');
+  try {
+    dom.window.confirm = () => true;
+    message({ t: 'admin_init', language: 'en', cfg: { language: 'en', cat_baud: 38400, ptt_method: 'TX1', max_tx_seconds: 180,
+      http_port: 8080, https_port: 8443 }, ports: [], audio: [], urls: [], log: [], detect: {}, win: false });
+    const document = dom.window.document;
+    document.querySelector('#max_tx_seconds').value = '181';
+    document.querySelector('#btnQuitTop').click();
+    assert.equal(sent.at(-1).t, 'admin_quit');
+    assert.equal(sent.at(-1).cfg.max_tx_seconds, 181);
+    assert.equal(document.querySelector('#btnQuitTop').disabled, true);
+    message({ t: 'admin_quit_failed', msg: 'Disk full' });
+    assert.equal(document.querySelector('#btnQuitTop').disabled, false);
+    assert.equal(dom.window.eval('quitting'), false);
+  } finally { dom.window.close(); }
+});
+test('shutdown from tray stops panel reconnect attempts', async () => {
+  const { dom, message } = await open('panel.html', 'en');
+  try {
+    message({ t: 'server_stopping' });
+    assert.equal(dom.window.eval('quitting'), true);
+    assert.equal(dom.window.document.querySelector('#gone').classList.contains('hidden'), false);
+  } finally { dom.window.close(); }
+});

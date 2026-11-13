@@ -127,7 +127,7 @@ class VoiceCq:
             return c.ws.send_json({'t': 'vk_note', 'msg': tr('Сообщение длиннее ограничения передачи')})
         pause = float(min(max(pause, 2), 600))
         repeats = int(min(max(repeats, 1), 100))
-        self.task = asyncio.create_task(self._loop(x, slot, pause, repeats, int(sig or 0)))
+        self.task = self.st.spawn(self._loop(x, slot, pause, repeats, int(sig or 0)))
 
     def stop(self, why=''):
         if self.task:

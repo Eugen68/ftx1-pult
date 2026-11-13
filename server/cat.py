@@ -273,12 +273,18 @@ class Rig:
         if getattr(self, '_task', None):
             self._task.cancel()
         try:
-            self.t.write(b'TX0;')
-            if self.serial_ptt:
-                self.serial_ptt.set(False)
+            self.t.write(b'KY00;TX0;')
         except Exception:
             pass
-        self.t.close()
+        if self.serial_ptt:
+            try:
+                self.serial_ptt.set(False)
+            except Exception:
+                pass
+        try:
+            self.t.close()
+        except Exception:
+            pass
         if self.serial_ptt:
             try:
                 self.serial_ptt.ser.close()
