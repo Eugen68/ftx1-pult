@@ -26,12 +26,8 @@ jobs:
         working-directory: server
         run: python setup_ftx.py build_ext --inplace
       # Справочник стран для FT8 (Country Files, AD1C). Не скачался — программа скачает сама при запуске.
-      - name: cty.dat
-        shell: pwsh
-        run: |
-          try { Invoke-WebRequest https://www.country-files.com/cty/cty.dat -OutFile server\cty.dat -TimeoutSec 60 }
-          catch { Write-Host "cty.dat не скачан: $_"; Set-Content server\cty.dat '' }
-          (Get-Item server\cty.dat).Length
+      - name: Fetch validated DXCC database
+        run: python .github/scripts/fetch_cty.py
       # Загрузчик PyInstaller собираем из исходников: готовый загрузчик из pip
       # антивирусы (Microsoft Defender) часто ложно считают «Wacatac».
       - name: PyInstaller с собственным загрузчиком
