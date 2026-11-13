@@ -1,7 +1,7 @@
 'use strict';
 // ======================================================================= Редактор каналов памяти (как ADMS / RT Systems)
 const memEd = (() => {
-  const CH_MIN = 1, CH_MAX = 99;
+  const CH_MIN = 1, CH_MAX = 999;
   const FM = ['FM', 'FM-N', 'DATA-FM', 'DATA-FM-N'];
   const FIELDS = ['empty', 'freq', 'mode', 'name', 'shift', 'tone_mode', 'ctcss', 'dcs', 'clar', 'rx_clar', 'tx_clar'];
   const GCOL = ['#4cc9f0', '#f8961e', '#90be6d', '#f94144', '#b5179e', '#ffd166', '#43aa8b', '#9d8df1', '#e76f51', '#6c9bd2'];
@@ -14,8 +14,8 @@ const memEd = (() => {
     ctcss: 88.5, dcs: 23, shift: 0, offset_khz: 0, group: '', comment: '' });
   const defOffset = f => { const m = f / 1e6; return m >= 28 && m < 30 ? 100 : m >= 50 && m < 54 ? 600 : m >= 144 && m < 148 ? 600 : m >= 430 && m < 440 ? 7600 : 0; };
   const fmtMHz = f => f ? (f / 1e6).toFixed(6).replace(/0{1,3}$/, '') : '';
-  const allCh = () => { const a = []; for (let i = CH_MIN; i <= CH_MAX; i++) a.push(i); for (const k of Object.keys(st.info?.pms || {})) if (st.chans[k]) a.push(+k); return a; };
-  const label = ch => st.info?.pms?.[ch] || String(ch).padStart(2, '0');
+  const allCh = () => { const a = []; for (let i = CH_MIN; i <= CH_MAX; i++) a.push(i); return a; };
+  const label = ch => String(ch).padStart(3, '0');
   const txFreq = c => c.freq + (c.shift === 1 ? 1 : c.shift === 2 ? -1 : 0) * (c.offset_khz || 0) * 1000;
   const same = (a, b) => FIELDS.every(k => (a.empty && b.empty) || (k === 'ctcss' ? Math.abs(a[k] - b[k]) < 0.05 : String(a[k] ?? '') === String(b[k] ?? '')))
     || (a.empty && b.empty);
@@ -130,10 +130,10 @@ const memEd = (() => {
   // ------------------------------------------------------------------ действия
   const selList = () => [...st.sel].sort((a, b) => a - b);
   function doRead() {
-    const from = clamp(+$('#meFrom').value || 1, 1, 99), to = clamp(+$('#meTo').value || 99, from, 99);
+    const from = clamp(+$('#meFrom').value || 1, 1, CH_MAX), to = clamp(+$('#meTo').value || CH_MAX, from, CH_MAX);
     if (allCh().some(isDirty) && !confirm('В таблице есть незаписанные изменения. Прочитать из трансивера и заменить ими таблицу (для читаемых номеров)?')) return;
     st.busy = true; renderInfo(); prog(0, 1, 'Чтение…');
-    send({ t: 'mem_read', from, to, tones: $('#meTones').checked, pms: $('#mePms').checked });
+    send({ t: 'mem_read', from, to, tones: $('#meTones').checked });
   }
   function doWrite(list) {
     const chans = list.map(ch => st.chans[ch]).filter(Boolean);
@@ -274,6 +274,12 @@ const memEd = (() => {
   $('#meWrite').onclick = () => doWrite(allCh().filter(isDirty));
   $('#meWriteSel').onclick = () => { if (!st.sel.size) return toast('Отметьте каналы'); doWrite(selList()); };
   $('#meStop').onclick = () => send({ t: 'mem_stop' });
+  $('#meAdd').onclick = () => {
+    const n = parseInt(prompt('Номер нового канала (1–999):', allCh().find(x => st.chans[x].empty) || ''), 10);
+    if (!(n >= CH_MIN && n <= CH_MAX)) return;
+    if (!st.chans[n].empty && !confirm(`Канал ${n} занят — заменить частотой и видом с VFO?`)) return;
+    send({ t: 'mem_from_vfo', ch: n });
+  };
   $('#meFromVfo').onclick = () => send({ t: 'mem_from_vfo', ch: selList()[0] || null });
   $('#meMove').onclick = moveSel;
   $('#meSort').onclick = sortSel;

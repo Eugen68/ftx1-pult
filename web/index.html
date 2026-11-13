@@ -640,10 +640,9 @@
   <div class="me-tools">
     <div class="me-grp">
       <button class="btn primary" id="meRead" title="Прочитать каналы из трансивера">⬇ Прочитать</button>
-      <label class="mini">с<input type="number" id="meFrom" class="num" min="1" max="99" value="1"></label>
-      <label class="mini">по<input type="number" id="meTo" class="num" min="1" max="99" value="99"></label>
+      <label class="mini">с<input type="number" id="meFrom" class="num" min="1" max="999" value="1"></label>
+      <label class="mini">по<input type="number" id="meTo" class="num" min="1" max="999" value="999"></label>
       <label class="chk mini" title="Номер тона CTCSS / код DCS: трансивер на мгновение переключается на каждый канал с тоном"><input type="checkbox" id="meTones" checked> тоны</label>
-      <label class="chk mini" title="Каналы PMS (границы сканирования P-01L…P-09U)"><input type="checkbox" id="mePms"> PMS</label>
     </div>
     <div class="me-grp">
       <button class="btn tx-on" id="meWrite" title="Записать в трансивер изменённые каналы">⬆ Записать изменённые <span id="meDirtyN">0</span></button>
@@ -668,7 +667,7 @@
       <div id="meGroups"></div>
       <div class="me-addgrp"><input id="meNewGrp" class="text" maxlength="30" placeholder="новая группа"><button class="btn small" id="meAddGrp">+</button></div>
       <div class="me-side-h">Показать</div>
-      <label class="chk mini"><input type="checkbox" id="meShowEmpty" checked> пустые каналы</label>
+      <label class="chk mini"><input type="checkbox" id="meShowEmpty"> пустые каналы</label>
       <label class="chk mini"><input type="checkbox" id="meOnlyDirty"> только изменённые</label>
       <input id="meSearch" class="text" placeholder="поиск: имя, частота">
     </aside>
@@ -689,6 +688,7 @@
       <div class="me-bottom">
         <span class="muted small" id="meSelInfo">Отмечено: 0</span>
         <select id="meSetGrp"><option value="">Группа для отмеченных…</option></select>
+        <button class="btn small" id="meAdd" title="Новый канал с частотой и видом текущего VFO">+ Канал</button>
         <button class="btn small" id="meFromVfo" title="Частоту и вид текущего VFO — в первый отмеченный (или первый пустой) канал">← с VFO</button>
         <button class="btn small" id="meMove" title="Перенести отмеченные каналы на новые номера">Перенести на №…</button>
         <button class="btn small" id="meSort" title="Отсортировать занятые каналы по частоте, начиная с первого отмеченного номера">Сортировать по частоте</button>

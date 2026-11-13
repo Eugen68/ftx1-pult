@@ -41,8 +41,8 @@ DCS = [23, 25, 26, 31, 32, 36, 43, 47, 51, 53, 54, 65, 71, 72, 73, 74, 114, 115,
 # В ответе MR и в памяти — 1 TSQ, 2 ENC (наоборот).
 MR_TO_CT = {0: 0, 1: 2, 2: 1, 3: 3}
 FM_MODES = ('FM', 'FM-N', 'DATA-FM', 'DATA-FM-N')
-CH_MIN, CH_MAX = 1, 99
-PMS = {100 + i: 'P-%02d%s' % (i // 2 + 1, 'LU'[i % 2]) for i in range(18)}     # 100..117 = P-01L..P-09U
+CH_MIN, CH_MAX = 1, 999            # обычные каналы FTX-1: 001–999
+PMS = {}
 
 
 def default_offset_khz(freq):
@@ -131,11 +131,11 @@ class MemoryDesk:
 
     # ------------------------------------------------------------------ чтение
     async def read_channel(self, ch):
-        r = await self.rig.exec_seq(['MR%05d' % ch, 'MT%05d' % ch])
-        mr, mt = r[0], r[1]
+        mr = (await self.rig.exec_seq(['MR%05d' % ch]))[0]
         c = parse_mr(mr)
         if not c:
             return blank(ch)
+        mt = (await self.rig.exec_seq(['MT%05d' % ch]))[0]
         c = dict(blank(ch), **c)
         if mt and mt.startswith('MT%05d' % ch):
             c['name'] = mt[7:19].rstrip()
@@ -214,6 +214,13 @@ class MemoryDesk:
         return cmds
 
     async def write_channel(self, c):
+        # Сначала убеждаемся, что курсор памяти SUB встал именно на нужный канал: BM пишет VFO-B
+        # «в последний выбранный канал», и при неверном курсоре запись ушла бы в чужую ячейку.
+        r = await self.rig.exec_seq(['MC1%05d' % c['ch'], '~120', 'MC1'])
+        m = re.match(r'^MC1?(\d{5,6})$', r[2] or '')
+        if not m or int(m.group(1)) != c['ch']:
+            raise RuntimeError('трансивер не встал на канал %d (ответ «%s») — запись остановлена, ничего не записано'
+                               % (c['ch'], r[2]))
         snap = await self.rig.exec_seq(['FB', 'MD1'])
         try:
             await self.rig.exec_seq(self._write_cmds(c))
@@ -258,7 +265,12 @@ class MemoryDesk:
                 if not 30_000 <= ch['freq'] <= 470_000_000:
                     results.append({'ch': ch['ch'], 'ok': False, 'msg': 'частота вне диапазона трансивера'})
                     continue
-                ok, problems, got = await self.write_channel(ch)
+                try:
+                    ok, problems, got = await self.write_channel(ch)
+                except RuntimeError as e:
+                    results.append({'ch': ch['ch'], 'ok': False, 'msg': str(e)})
+                    c.ws.send_json({'t': 'mem_err', 'msg': str(e)})
+                    break
                 results.append({'ch': ch['ch'], 'ok': ok, 'msg': ', '.join(problems)})
                 c.ws.send_json({'t': 'mem_progress', 'what': 'write', 'i': i + 1, 'n': n, 'ch': ch['ch']})
             good = sum(r['ok'] for r in results)

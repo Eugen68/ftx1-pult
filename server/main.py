@@ -47,7 +47,7 @@ from recorder import QsoRecorder  # noqa: E402
 from ft8 import Ft8Desk  # noqa: E402
 from memory import MemoryDesk  # noqa: E402
 
-VERSION = "2.8"
+VERSION = "2.9"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
