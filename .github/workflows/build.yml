@@ -5,7 +5,7 @@ name: Build FTX1-Pult.exe
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, feat/english-language]
     tags: ['v*']
 permissions:
   contents: write
@@ -19,6 +19,8 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt setuptools
+      - name: Language regression tests
+        run: python -m unittest discover -s tests -v
       # FT8/FT4: модуль _ftx из ft8_lib (C, MIT) — собирается компилятором MSVC
       - name: Модуль FT8 (_ftx)
         working-directory: server
@@ -61,13 +63,18 @@ jobs:
       - name: Проверка запуска сервера (симулятор)
         shell: pwsh
         run: |
-          '{"open_panel": false, "auto_connect": true}' | Set-Content dist\config.json
+          '{"open_panel": false, "auto_connect": true, "language": "en"}' | Set-Content dist\config.json
           $p = Start-Process dist\FTX1-Pult.exe -ArgumentList '--sim','--background' -PassThru
           Start-Sleep -Seconds 12
           $ping = (Invoke-WebRequest http://127.0.0.1:8080/api/ping -UseBasicParsing).Content
           $panel = (Invoke-WebRequest http://127.0.0.1:8080/panel.html -UseBasicParsing).StatusCode
           $pult = (Invoke-WebRequest http://127.0.0.1:8080/ -UseBasicParsing).StatusCode
-          "ping: $ping  panel: $panel  pult: $pult"
+          $language = (Invoke-RestMethod http://127.0.0.1:8080/api/language).language
+          $manifestLanguage = (Invoke-RestMethod http://127.0.0.1:8080/manifest.webmanifest).lang
+          $catalogue = (Invoke-WebRequest http://127.0.0.1:8080/locales/en.json -UseBasicParsing).StatusCode
+          $localeScript = (Invoke-WebRequest http://127.0.0.1:8080/i18n.js -UseBasicParsing).StatusCode
+          "ping: $ping  panel: $panel  pult: $pult  language: $language  manifest: $manifestLanguage"
+          if ($language -ne 'en' -or $manifestLanguage -ne 'en' -or $catalogue -ne 200 -or $localeScript -ne 200) { exit 1 }
           Get-Content dist\ftx1-pult.log
           Stop-Process -Id $p.Id -Force
           Remove-Item dist\config.json, dist\cert.pem, dist\key.pem, dist\ftx1-pult.log -ErrorAction SilentlyContinue
@@ -80,6 +87,8 @@ jobs:
             dist/FTX1-Pult.exe
             dist/FTX1-Pult-folder.zip
             dist/SHA256.txt
+            selftest.txt
+            LANGUAGES.md
       - name: Релиз «последняя сборка»
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
