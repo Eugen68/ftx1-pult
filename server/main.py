@@ -10,6 +10,8 @@ FTX-1 Пульт — сервер удалённого управления Yaes
     --list         показать COM-порты и звуковые устройства и выйти
     --console      журнал в консоль
 """
+
+from i18n import tr, configure, language, LANGUAGES
 import argparse
 import asyncio
 import collections
@@ -53,6 +55,7 @@ log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
 
 DEFAULT_CFG = {
+    "language": "ru",
     "cat_port": "",
     "cat_baud": 38400,
     "ptt_method": "TX1",
@@ -103,7 +106,8 @@ def load_cfg():
     except FileNotFoundError:
         pass
     except Exception as e:
-        log.error("config.json повреждён (%s) — использую настройки по умолчанию", e)
+        log.error(tr("config.json повреждён (%s) — использую настройки по умолчанию"), e)
+    cfg["language"] = configure(cfg.get("language"))
     return cfg
 
 
@@ -143,7 +147,7 @@ def ensure_cert():
         from cryptography.hazmat.primitives.asymmetric import rsa
         import datetime
     except ImportError:
-        log.warning("Нет пакета cryptography — HTTPS выключен (микрофон с телефона работать не будет)")
+        log.warning(tr("Нет пакета cryptography — HTTPS выключен (микрофон с телефона работать не будет)"))
         return None, None
     k = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'FTX-1 Remote')])
@@ -248,7 +252,7 @@ def list_audio(refresh=False):
         from audio import list_devices
         return list_devices(refresh)
     except Exception as e:
-        log.warning("Звуковые устройства недоступны: %s", e)
+        log.warning(tr("Звуковые устройства недоступны: %s"), e)
         return []
 
 
@@ -290,6 +294,7 @@ class Client:
 class Station:
     def __init__(self, cfg, force_sim=False):
         self.cfg = cfg
+        configure(cfg.get("language"))
         self.force_sim = force_sim
         self.clients = set()
         self.rig = None
@@ -306,6 +311,7 @@ class Station:
         self.loop = None
         self.quit_event = None
         self.https_ok = False
+        self.tray = None
         self.ports_cache, self.audio_cache = [], []
         with open(os.path.join(RES, 'menu_ftx1.json'), encoding='utf-8') as f:
             self.menu = json.load(f)
@@ -321,7 +327,7 @@ class Station:
         try:
             save_cfg(self.cfg)
         except OSError as e:
-            log.error("Не удалось сохранить настройки: %s", e)
+            log.error(tr("Не удалось сохранить настройки: %s"), e)
 
     @property
     def sim(self):
@@ -347,35 +353,35 @@ class Station:
                 from sim import SimRadio, SimTransport, SimAudio
                 radio = SimRadio()
                 transport, audio = SimTransport(radio), SimAudio(radio)
-                log.info("Запуск в режиме СИМУЛЯТОРА (трансивер не нужен)")
+                log.info(tr("Запуск в режиме СИМУЛЯТОРА (трансивер не нужен)"))
             else:
                 if not cfg.get('cat_port'):
-                    raise RuntimeError("Не выбран COM-порт трансивера")
+                    raise RuntimeError(tr("Не выбран COM-порт трансивера"))
                 from audio import SoundDeviceAudio
                 transport = SerialTransport(cfg['cat_port'], int(cfg['cat_baud']))
                 audio = SoundDeviceAudio(cfg.get('audio_in_name', ''), cfg.get('audio_out_name', ''),
                                          cfg.get('audio_api', ''), cfg.get('audio_in_index'), cfg.get('audio_out_index'))
                 if cfg['ptt_method'] in ('RTS', 'DTR') and cfg.get('ptt_port'):
                     serial_ptt = SerialPtt(cfg['ptt_port'], cfg['ptt_method'])
-                log.info("Подключаюсь к трансиверу: %s, %s бод", cfg['cat_port'], cfg['cat_baud'])
+                log.info(tr("Подключаюсь к трансиверу: %s, %s бод"), cfg['cat_port'], cfg['cat_baud'])
             rig = Rig(transport, self._on_rig_change,
                       'RTS' if cfg['ptt_method'] in ('RTS', 'DTR') else cfg['ptt_method'], serial_ptt)
             try:
                 await rig.start()
             except Exception as e:
-                raise RuntimeError("Порт %s не открывается: %s. Возможно, он занят другой программой "
-                                   "(WSJT-X, N1MM, Log4OM…) или выбран не тот порт." % (cfg['cat_port'], e))
+                raise RuntimeError(tr("Порт %s не открывается: %s. Возможно, он занят другой программой "
+                                   "(WSJT-X, N1MM, Log4OM…) или выбран не тот порт.") % (cfg['cat_port'], e))
             self.rig = rig
             self.audio = audio
             audio.tx.tap = self.rec.tap_tx
             try:
                 audio.start(self._rx_from_thread)
-                log.info("Звук трансивера подключён")
+                log.info(tr("Звук трансивера подключён"))
             except Exception as e:
                 self.audio_err = str(e).split('\n')[0]
-                log.error("Звук не запущен: %s", self.audio_err)
+                log.error(tr("Звук не запущен: %s"), self.audio_err)
             self.running = True
-            log.info("Связь с трансивером запущена")
+            log.info(tr("Связь с трансивером запущена"))
             self._broadcast_hello_state()
         except Exception as e:
             self.last_error = str(e)
@@ -407,9 +413,9 @@ class Station:
             pass
         self.rig = self.audio = None
         self.running = False
-        log.info("Связь с трансивером остановлена")
+        log.info(tr("Связь с трансивером остановлена"))
         self.broadcast({'t': 'state', 's': {'connected': False}})
-        self.broadcast({'t': 'audio_status', 'err': 'Связь с трансивером остановлена'})
+        self.broadcast({'t': 'audio_status', 'err': tr('Связь с трансивером остановлена')})
         self.push_status()
 
     def _rx_from_thread(self, x):
@@ -467,22 +473,22 @@ class Station:
     def set_ptt(self, client, on):
         if not self.rig:
             if on and client:
-                client.ws.send_json({'t': 'note', 'msg': 'Сервер не подключён к трансиверу'})
+                client.ws.send_json({'t': 'note', 'msg': tr('Сервер не подключён к трансиверу')})
             return
         if on:
             if self.vk.task:                             # PTT вручную — автовызов прекращаем, работаем сами
-                self.vk.stop('нажата PTT')
+                self.vk.stop(tr('нажата PTT'))
                 self.vk.busy = False
             if self.digi.tx_busy or self.cw.sender.busy or self.ft.busy:
-                client.ws.send_json({'t': 'note', 'msg': 'Идёт передача RTTY/CW/FT8 — дождитесь окончания'})
+                client.ws.send_json({'t': 'note', 'msg': tr('Идёт передача RTTY/CW/FT8 — дождитесь окончания')})
                 return
             if self.ptt_owner not in (None, client):
-                client.ws.send_json({'t': 'note', 'msg': 'Передача занята другим клиентом (%s)' % self.ptt_owner.name})
+                client.ws.send_json({'t': 'note', 'msg': tr('Передача занята другим клиентом (%s)') % self.ptt_owner.name})
                 return
             if self.ptt_owner is None:
                 self.audio.tx.clear()
                 self.ptt_since = time.monotonic()
-                log.info("Передача: %s", client.name)
+                log.info(tr("Передача: %s"), client.name)
             self.ptt_owner = client
             self.ptt_alive = time.monotonic()
             self.rig.ptt(True)
@@ -502,12 +508,12 @@ class Station:
                 if self.ptt_owner:
                     now = time.monotonic()
                     if now - self.ptt_alive > 1.5:
-                        log.warning("PTT снят: нет подтверждений от клиента %s", self.ptt_owner.name)
-                        self.ptt_owner.ws.send_json({'t': 'note', 'msg': 'Передача снята: потеря связи'})
+                        log.warning(tr("PTT снят: нет подтверждений от клиента %s"), self.ptt_owner.name)
+                        self.ptt_owner.ws.send_json({'t': 'note', 'msg': tr('Передача снята: потеря связи')})
                         self.set_ptt(None, False)
                     elif now - self.ptt_since > self.cfg['max_tx_seconds']:
-                        log.warning("PTT снят: превышено время передачи")
-                        self.ptt_owner.ws.send_json({'t': 'note', 'msg': 'Передача снята: превышено время (%d с)' % self.cfg['max_tx_seconds']})
+                        log.warning(tr("PTT снят: превышено время передачи"))
+                        self.ptt_owner.ws.send_json({'t': 'note', 'msg': tr('Передача снята: превышено время (%d с)') % self.cfg['max_tx_seconds']})
                         self.set_ptt(None, False)
                 await self.cw.tick()
                 if self.audio:
@@ -571,6 +577,47 @@ class Station:
             if any(c.admin for c in self.clients):
                 self.push_status()
 
+    def set_language(self, client, value):
+        if value not in LANGUAGES:
+            client.ws.send_json({'t': 'language_error', 'language': language(), 'msg': tr('Недопустимый язык')})
+            return
+        if value == language():
+            client.ws.send_json({'t': 'language', 'language': value})
+            return
+        rig = self.rig.state if self.rig else {}
+        if (self.busy or rig.get('tx') or rig.get('tuning') or self.ptt_owner is not None
+                or self.cw.sender.busy or self.cw.proposal is not None or self.cw.ai_busy or self.cw.auto_on()
+                or self.digi.tx_busy or self.vk.task or self.ft.busy or self.ft.tx_enable
+                or self.mem.task):
+            client.ws.send_json({'t': 'language_error', 'language': language(),
+                                 'msg': tr('Сначала остановите передачу, автовызов и операции с памятью.')})
+            return
+        # Persist first: a failed write must not change the running station.
+        updated = dict(self.cfg, language=value)
+        try:
+            save_cfg(updated)
+        except OSError as exc:
+            client.ws.send_json({'t': 'language_error', 'language': language(),
+                                 'msg': tr('Не удалось сохранить язык: %s') % exc})
+            return
+        self.cfg['language'] = configure(value)
+        tray = getattr(self, 'tray', None)
+        if tray is not None:
+            try:
+                tray.title = tr(APP_NAME)
+                tray.update_menu()
+            except Exception:
+                pass
+        for connected in tuple(self.clients):
+            if connected.authed:
+                connected.ws.send_json({'t': 'language', 'language': value})
+
+    def manifest(self):
+        with open(os.path.join(web_dir(), 'manifest.webmanifest'), encoding='utf-8') as file:
+            manifest = json.load(file)
+        manifest.update(lang=language(), name=tr(manifest['name']), description=tr(manifest['description']))
+        return 'application/manifest+json', json.dumps(manifest, ensure_ascii=False).encode('utf-8')
+
     async def _admin_msg(self, c, m):
         t = m['t']
         if t == 'admin_hello':
@@ -579,7 +626,7 @@ class Station:
             self.ports_cache = await asyncio.to_thread(list_ports)
             self.audio_cache = await asyncio.to_thread(list_audio, not self.running)
             c.ws.send_json({'t': 'admin_init', 'cfg': self.cfg, 'ports': self.ports_cache, 'audio': self.audio_cache,
-                            'urls': self.urls(), 'autostart': autostart_get(), 'version': VERSION,
+                            'language': language(), 'urls': self.urls(), 'autostart': autostart_get(), 'version': VERSION,
                             'log': list(LOGBUF.lines), 'first_run': not os.path.exists(cfg_path()),
                             'detect': detect(self.ports_cache, self.audio_cache), 'win': IS_WIN})
             c.ws.send_json({'t': 'admin_status', 's': self.status()})
@@ -589,17 +636,17 @@ class Station:
             c.ws.send_json({'t': 'admin_devices', 'ports': self.ports_cache, 'audio': self.audio_cache,
                             'detect': detect(self.ports_cache, self.audio_cache), 'urls': self.urls()})
         elif t == 'admin_save':
-            new = {k: v for k, v in (m.get('cfg') or {}).items() if k in DEFAULT_CFG}
+            new = {k: v for k, v in (m.get('cfg') or {}).items() if k in DEFAULT_CFG and k != 'language'}
             radio_keys = ('cat_port', 'cat_baud', 'ptt_method', 'ptt_port', 'audio_in_name', 'audio_out_name', 'audio_api',
                           'audio_in_index', 'audio_out_index', 'simulate')
             need_restart = self.running and any(new.get(k, self.cfg.get(k)) != self.cfg.get(k) for k in radio_keys)
             port_change = any(new.get(k, self.cfg.get(k)) != self.cfg.get(k) for k in ('http_port', 'https_port'))
             self.cfg.update(new)
             save_cfg(self.cfg)
-            log.info("Настройки сохранены")
+            log.info(tr("Настройки сохранены"))
             c.ws.send_json({'t': 'admin_saved', 'cfg': self.cfg, 'port_change': port_change})
             if need_restart:
-                log.info("Перезапуск связи с новыми настройками")
+                log.info(tr("Перезапуск связи с новыми настройками"))
                 await self.stop_radio()
                 await self.start_radio()
         elif t == 'admin_start':
@@ -611,10 +658,10 @@ class Station:
         elif t == 'admin_autostart':
             try:
                 v = autostart_set(bool(m.get('on')))
-                log.info("Автозапуск вместе с Windows: %s", 'включён' if v else 'выключен')
+                log.info(tr("Автозапуск вместе с Windows: %s"), tr('включён') if v else tr('выключен'))
             except Exception as e:
                 v = autostart_get()
-                log.error("Не удалось изменить автозапуск: %s", e)
+                log.error(tr("Не удалось изменить автозапуск: %s"), e)
             c.ws.send_json({'t': 'admin_autostart', 'on': v})
         elif t == 'admin_ai':
             import ai as ai_mod
@@ -630,7 +677,7 @@ class Station:
             if IS_WIN:
                 os.startfile(BASE)
         elif t == 'admin_quit':
-            log.info("Выход из программы")
+            log.info(tr("Выход из программы"))
             await self.stop_radio()
             self.quit_event.set()
 
@@ -653,7 +700,7 @@ class Station:
                     try:
                         await self._on_msg(c, m)
                     except Exception as e:
-                        log.exception("Ошибка обработки %s: %s", m.get('t'), e)
+                        log.exception(tr("Ошибка обработки %s: %s"), m.get('t'), e)
                 elif kind == 'bin' and c.authed and data[:1] == b'\x03':
                     if len(data) > 2 and data[1] in (1, 2, 6) and len(data) % 2 == 0:
                         self._on_tx_audio(c, data[2:], data[1] * 8000)
@@ -669,7 +716,7 @@ class Station:
             self.digi.client_gone(c)
             self.ft.client_gone(c)
             if c.authed and not c.admin:
-                log.info("Отключился %s", c.name)
+                log.info(tr("Отключился %s"), c.name)
                 self.push_status()
 
     def _on_tx_audio(self, c, pcm, rate):
@@ -695,29 +742,32 @@ class Station:
                 c.rate = m.get('rate') if m.get('rate') in (8000, 16000, 48000) else 16000
                 c.ws.send_json({'t': 'hello_ok', 'local': c.local, 'version': VERSION,
                                 'audio_err': self.audio_err, 'ctcss': CTCSS, 'running': self.running,
-                                'max_tx': self.cfg['max_tx_seconds'], 'ptt_method': self.cfg['ptt_method']})
+                                'language': language(), 'max_tx': self.cfg['max_tx_seconds'], 'ptt_method': self.cfg['ptt_method']})
                 c.ws.send_json({'t': 'state', 's': self.rig.state if self.rig else {'connected': False}, 'full': True})
                 if self.rig:
                     self.rig.refresh()                     # свежие значения из трансивера, а не из памяти
-                c.ws.send_json({'t': 'audio_status', 'err': self.audio_err if self.running else 'Связь с трансивером остановлена'})
+                c.ws.send_json({'t': 'audio_status', 'err': self.audio_err if self.running else tr('Связь с трансивером остановлена')})
                 if self.wf.bandwidth:
                     c.ws.send_json({'t': 'bw', 'hz': self.wf.bandwidth})
                 if not self.running:
-                    c.ws.send_json({'t': 'note', 'msg': 'Сервер запущен, но связь с трансивером остановлена — нажмите «Запустить» в панели управления'})
+                    c.ws.send_json({'t': 'note', 'msg': tr('Сервер запущен, но связь с трансивером остановлена — нажмите «Запустить» в панели управления')})
                 self._ptt_info()
-                log.info("Подключился пульт %s", c.name)
+                log.info(tr("Подключился пульт %s"), c.name)
                 self.push_status()
             else:
-                msg = ('Удалённый доступ выключен: задайте пароль в панели управления на ПК с трансивером'
-                       if not pw else 'Неверный пароль')
+                msg = (tr('Удалённый доступ выключен: задайте пароль в панели управления на ПК с трансивером')
+                       if not pw else tr('Неверный пароль'))
                 first = not m.get('pw')
                 if not first:
-                    log.warning("Отказ в доступе %s: %s", c.name, 'нет пароля на сервере' if not pw else 'неверный пароль')
+                    log.warning(tr("Отказ в доступе %s: %s"), c.name, tr('нет пароля на сервере') if not pw else tr('неверный пароль'))
                     c.fails = getattr(c, 'fails', 0) + 1
                     await asyncio.sleep(min(5, 0.7 * c.fails))     # от перебора паролей; соединение не рвём
                 c.ws.send_json({'t': 'auth_fail', 'msg': msg, 'first': first and bool(pw)})
             return
         if not c.authed:
+            return
+        if t == 'set_language':
+            self.set_language(c, m.get('language'))
             return
         if t.startswith('cw_'):
             await self.cw.on_msg(c, m)
@@ -726,11 +776,11 @@ class Station:
             if t == 'rec_start' and self.running and self.audio and not self.audio_err:
                 st = self.rig.state if self.rig else {}
                 name = self.rec.start(st.get('freq_a') or 0, st.get('mode') or '')
-                log.info("Запись связи: %s", name)
+                log.info(tr("Запись связи: %s"), name)
             elif t == 'rec_start':
-                c.ws.send_json({'t': 'note', 'msg': 'Запись невозможна: звук трансивера не подключён'})
+                c.ws.send_json({'t': 'note', 'msg': tr('Запись невозможна: звук трансивера не подключён')})
             elif t == 'rec_stop' and self.rec.on:
-                log.info("Запись связи остановлена: %s (%d с)", self.rec.name, self.rec.elapsed())
+                log.info(tr("Запись связи остановлена: %s (%d с)"), self.rec.name, self.rec.elapsed())
                 self.rec.stop()
             if t == 'rec_hello':
                 c.ws.send_json(self.rec_state())
@@ -774,7 +824,7 @@ class Station:
         rig = self.rig
         if not rig:
             if t in ('set', 'act', 'raw', 'menu_get', 'menu_set'):
-                c.ws.send_json({'t': 'note', 'msg': 'Связь с трансивером остановлена'})
+                c.ws.send_json({'t': 'note', 'msg': tr('Связь с трансивером остановлена')})
             return
         if t == 'set':
             rig.set_param(m.get('k'), m.get('v'))
@@ -831,7 +881,7 @@ def open_window(url, size=(1080, 860)):
                              creationflags=flags, close_fds=True)
             return
         except Exception as e:
-            log.debug("app-окно не открылось: %s", e)
+            log.debug(tr("app-окно не открылось: %s"), e)
     webbrowser.open(url)
 
 
@@ -850,16 +900,17 @@ def start_tray(station, panel_url, pult_url):
             loop.call_soon_threadsafe(lambda: asyncio.ensure_future(station._admin_msg_quit()))
 
         menu = pystray.Menu(
-            pystray.MenuItem('Панель управления', lambda i, it: open_window(panel_url), default=True),
-            pystray.MenuItem('Открыть пульт', lambda i, it: open_window(pult_url, (1400, 900))),
+            pystray.MenuItem(lambda item: tr('Панель управления'), lambda i, it: open_window(panel_url), default=True),
+            pystray.MenuItem(lambda item: tr('Открыть пульт'), lambda i, it: open_window(pult_url, (1400, 900))),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem('Выход', quit_app),
+            pystray.MenuItem(lambda item: tr('Выход'), quit_app),
         )
-        icon = pystray.Icon('FTX1Pult', img, APP_NAME, menu)
+        icon = pystray.Icon('FTX1Pult', img, tr(APP_NAME), menu)
         icon.run_detached()
+        station.tray = icon
         return icon
     except Exception as e:
-        log.debug("Трей недоступен: %s", e)
+        log.debug(tr("Трей недоступен: %s"), e)
         return None
 
 
@@ -886,7 +937,7 @@ def message_box(text, title=APP_NAME):
     if IS_WIN:
         try:
             import ctypes
-            ctypes.windll.user32.MessageBoxW(0, text, title, 0x40)
+            ctypes.windll.user32.MessageBoxW(0, text, tr(title), 0x40)
             return
         except Exception:
             pass
@@ -895,10 +946,10 @@ def message_box(text, title=APP_NAME):
 
 # ------------------------------------------------------------------ запуск
 def list_all():
-    print("COM-порты:")
+    print(tr("COM-порты:"))
     for p in list_ports():
         print("  %-8s %s" % (p['device'], p['desc']))
-    print("\nЗвуковые устройства:")
+    print(tr("\nЗвуковые устройства:"))
     for d in list_audio():
         print("  [%2d] %-45s %-20s in=%d out=%d" % (d['index'], d['name'], d['api'], d['in'], d['out']))
 
@@ -908,14 +959,16 @@ async def amain(args):
     st = Station(cfg, force_sim=args.sim)
     await st.init()
 
-    app = WebServer(web_dir(), st.handle_ws, {'/api/ping': lambda: ('text/plain', b'FTX1-PULT ' + VERSION.encode())},
+    app = WebServer(web_dir(), st.handle_ws, {'/api/ping': lambda: ('text/plain', b'FTX1-PULT ' + VERSION.encode()),
+                                            '/api/language': lambda: ('application/json', json.dumps({'language': language()}).encode()),
+                                            '/manifest.webmanifest': st.manifest},
                     {'/rec/': st.rec_download})
     servers = []
     http_host = '0.0.0.0' if cfg.get('http_lan') else '127.0.0.1'
     try:
         servers.append(await asyncio.start_server(app.handle, http_host, cfg['http_port']))
     except OSError as e:
-        message_box("Не удалось занять порт %d: %s\n\nЕго использует другая программа. Смените http_port в config.json."
+        message_box(tr("Не удалось занять порт %d: %s\n\nЕго использует другая программа. Смените http_port в config.json.")
                     % (cfg['http_port'], e))
         return
     crt, key = ensure_cert()
@@ -926,11 +979,11 @@ async def amain(args):
             servers.append(await asyncio.start_server(app.handle, '0.0.0.0', cfg['https_port'], ssl=ctx))
             st.https_ok = True
         except OSError as e:
-            log.error("HTTPS-порт %d занят (%s) — вход с телефона недоступен", cfg['https_port'], e)
+            log.error(tr("HTTPS-порт %d занят (%s) — вход с телефона недоступен"), cfg['https_port'], e)
 
     panel_url = 'http://localhost:%d/panel.html' % cfg['http_port']
     pult_url = 'http://localhost:%d/' % cfg['http_port']
-    log.info("%s %s запущен. Панель: %s", APP_NAME, VERSION, panel_url)
+    log.info(tr("%s %s запущен. Панель: %s"), tr(APP_NAME), VERSION, panel_url)
 
     first_run = not os.path.exists(cfg_path())
     if (cfg.get('auto_connect') and not first_run) or args.sim:
@@ -942,7 +995,7 @@ async def amain(args):
             open_window(pult_url, (1400, 900))
     icon = start_tray(st, panel_url, pult_url)
     if icon is None and args.background is False and not find_app_browser():
-        log.info("Совет: установите pystray и Pillow, чтобы получить значок в трее")
+        log.info(tr("Совет: установите pystray и Pillow, чтобы получить значок в трее"))
 
     tasks = [asyncio.create_task(s.serve_forever()) for s in servers]
     await st.quit_event.wait()
@@ -973,7 +1026,7 @@ def selftest(path):
         ok = False
         rep.append('FAIL audio: %s' % e)
     for f in ('index.html', 'app.js', 'mem.js', 'app.css', 'worklets.js', 'panel.html', 'panel.js', 'qrcode.js',
-              'manifest.webmanifest', 'sw.js', 'icon-192.png'):
+              'manifest.webmanifest', 'sw.js', 'icon-192.png', 'i18n.js', 'locales/en.json'):
         p = os.path.join(web_dir(), f)
         good = os.path.isfile(p)
         ok &= good
@@ -1039,10 +1092,10 @@ def selftest(path):
             c.load(cp)
             e = c.lookup('R6AAF')
             good = bool(e) and 'Russia' in e['name'] and c.count > 300
-            rep.append(('OK   ' if good else 'FAIL ') + 'cty.dat: %d стран, %s' % (c.count, c.date))
+            rep.append(('OK   ' if good else 'FAIL ') + tr('cty.dat: %d стран, %s') % (c.count, c.date))
             ok &= good
         else:
-            rep.append('--   cty.dat не вшит (скачается при запуске)')
+            rep.append(tr('--   cty.dat не вшит (скачается при запуске)'))
     except Exception as e:
         ok = False
         rep.append('FAIL cty.dat: %s' % e)
@@ -1056,13 +1109,14 @@ def selftest(path):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="FTX-1 Пульт — удалённое управление Yaesu FTX-1")
-    ap.add_argument('--sim', action='store_true', help='симулятор трансивера')
-    ap.add_argument('--list', action='store_true', help='показать COM-порты и звуковые устройства')
-    ap.add_argument('--background', action='store_true', help='без окна (автозапуск)')
-    ap.add_argument('--console', action='store_true', help='журнал в консоль')
+    load_cfg()  # Configure command-line messages before building the parser.
+    ap = argparse.ArgumentParser(description=tr("FTX-1 Пульт — удалённое управление Yaesu FTX-1"))
+    ap.add_argument('--sim', action='store_true', help=tr('симулятор трансивера'))
+    ap.add_argument('--list', action='store_true', help=tr('показать COM-порты и звуковые устройства'))
+    ap.add_argument('--background', action='store_true', help=tr('без окна (автозапуск)'))
+    ap.add_argument('--console', action='store_true', help=tr('журнал в консоль'))
     ap.add_argument('-v', '--verbose', action='store_true')
-    ap.add_argument('--selftest', metavar='FILE', help='проверить состав сборки и записать отчёт в FILE')
+    ap.add_argument('--selftest', metavar='FILE', help=tr('проверить состав сборки и записать отчёт в FILE'))
     args = ap.parse_args()
     if args.selftest:
         selftest(args.selftest)

@@ -1,3 +1,5 @@
+**English / Русский:** выбор языка теперь доступен в настройках пульта и панели сервера. [Language settings and English instructions](LANGUAGES.md).
+
 # FTX-1 Пульт — удалённое управление Yaesu FTX-1
 
 Полноценный пульт для FTX-1 (Field и Optima) через USB-кабель трансивера:

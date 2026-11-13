@@ -10,6 +10,8 @@ Manual 2508-C (через драйвер Hamlib rigs/yaesu/ftx1, автор KJ5H
     Любой ответ трансивера (на запрос или по Auto Information) сразу
     обновляет состояние; изменения уходят подписчикам (веб-клиентам).
 """
+
+from i18n import tr
 import asyncio
 import re
 import threading
@@ -188,7 +190,7 @@ class SerialTransport:
             try:
                 data = self.ser.read(256)
             except Exception as e:  # порт пропал (кабель выдернули)
-                log.error("Ошибка чтения COM: %s", e)
+                log.error(tr("Ошибка чтения COM: %s"), e)
                 self.failed = True
                 on_bytes(None)
                 return
@@ -359,7 +361,7 @@ class Rig:
         try:
             self.t.write(cmd.encode('ascii'))
         except Exception as e:
-            log.error("Ошибка записи COM: %s", e)
+            log.error(tr("Ошибка записи COM: %s"), e)
             self._set({'connected': False})
             await asyncio.sleep(1)
             return None
@@ -396,10 +398,10 @@ class Rig:
                     await asyncio.sleep(3)
                     try:
                         self.t.reopen()
-                        log.info("COM-порт открыт заново")
+                        log.info(tr("COM-порт открыт заново"))
                         self.send('AI1;')
                     except Exception as e:
-                        log.warning("Порт пока недоступен: %s", e)
+                        log.warning(tr("Порт пока недоступен: %s"), e)
                     continue
                 # 1) команды пользователя — всегда первыми
                 while not self._q.empty():
@@ -455,7 +457,7 @@ class Rig:
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # не даём опросу умереть
-                log.exception("Ошибка цикла CAT: %s", e)
+                log.exception(tr("Ошибка цикла CAT: %s"), e)
                 await asyncio.sleep(0.5)
 
     def refresh(self, delay=0.0):

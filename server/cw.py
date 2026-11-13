@@ -14,6 +14,8 @@ CW (азбука Морзе): декодер звука приёма и пере
   'dtr'/'rts' — манипуляция линией второго (Standard) COM-порта, тайминг наш
                 (в меню трансивера CW_PC_KEYING = DTR/RTS, включён BREAK-IN).
 """
+
+from i18n import tr
 import logging
 import re
 import threading
@@ -396,7 +398,7 @@ class CwSender:
                 self._run_cat(text, wpm, cyr, max_s)
             self.on_event({'t': 'cw_tx_done', 'ok': not self._stop.is_set(), 'secs': round(time.monotonic() - t0, 1)})
         except Exception as e:
-            log.exception("Ошибка передачи CW")
+            log.exception(tr("Ошибка передачи CW"))
             self.on_event({'t': 'cw_tx_done', 'ok': False, 'err': str(e)})
         finally:
             self.busy = False
@@ -450,7 +452,7 @@ class CwSender:
                 if not self.get_state().get('tx') and el > 0.5:
                     break
                 if el > dur + 6 or time.monotonic() - t_start > max_s:
-                    log.warning("CW: передача куска затянулась — останавливаю")
+                    log.warning(tr("CW: передача куска затянулась — останавливаю"))
                     self._stop.set()
                     break
                 time.sleep(0.1)
@@ -463,7 +465,7 @@ class CwSender:
     def _run_line(self, text, method, wpm, port, cyr, max_s):
         import serial
         if not port:
-            raise RuntimeError("Не выбран порт для манипуляции (Standard COM Port)")
+            raise RuntimeError(tr("Не выбран порт для манипуляции (Standard COM Port)"))
         ser = serial.Serial(port, 9600, timeout=0)
         set_line = (lambda v: setattr(ser, 'dtr', v)) if method == 'dtr' else (lambda v: setattr(ser, 'rts', v))
         set_line(False)

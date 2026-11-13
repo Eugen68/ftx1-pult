@@ -8,6 +8,8 @@ SSTV — приём картинок: Martin M1/M2, Scottie S1/S2, Robot 36, PD 
 
 Тайминги — по N7CXI (2000) «Proposal for SSTV Mode Specifications».
 """
+
+from i18n import tr
 import time
 
 import numpy as np
@@ -170,7 +172,7 @@ class SstvDecoder:
         if enabled is not None and bool(enabled) != self.enabled:
             self.enabled = bool(enabled)
             if not self.enabled and self.state == 'image':
-                self.finish('приём выключен')
+                self.finish(tr('приём выключен'))
             self.reset()
 
     # ---------------------------------------------------------------- звук -> частота
@@ -291,7 +293,7 @@ class SstvDecoder:
             if len(chain) >= 5:
                 chain.reverse()
                 line0 = chain[0] - m.sync_off * FS
-                self._begin(m, line0, 'синхроимпульсы')
+                self._begin(m, line0, tr('синхроимпульсы'))
                 return
 
     # ---------------------------------------------------------------- картинка
@@ -390,10 +392,10 @@ class SstvDecoder:
                 self._row(_yuv2rgb(y1, u, v))
             self.next_line += 1
             if self.lost >= 12:
-                self.finish('сигнал пропал')
+                self.finish(tr('сигнал пропал'))
                 return
         if self.state == 'image' and self.next_line >= m.frames:
-            self.finish('картинка принята')
+            self.finish(tr('картинка принята'))
             return
         # освобождаем память за уже отрисованными строками
         keep_from = int(self.t0 + (self.next_line - 2) * self.T) - self.fb

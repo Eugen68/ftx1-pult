@@ -1,0 +1,6 @@
+{
+  "name": "ftx1-pult-language-tests",
+  "private": true,
+  "scripts": { "test": "node --test i18n.test.cjs" },
+  "devDependencies": { "acorn": "8.19.0", "jsdom": "26.1.0" }
+}

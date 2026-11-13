@@ -10,6 +10,8 @@ JTDX, MSHV, N1MM). Где берём файл (самый свежий из на
 Сработанное — из своего лога FT8 (ft8_log.adi) и из ADIF-файлов, загруженных пользователем
 (экспорт из HAMLOG или другого журнала).
 """
+
+from i18n import tr
 import glob
 import json
 import logging
@@ -100,14 +102,14 @@ class Cty:
                 elif key:
                     prefix[key] = e
         if count < 50:
-            raise ValueError('мало стран (%d) — файл не похож на cty.dat' % count)
+            raise ValueError(tr('мало стран (%d) — файл не похож на cty.dat') % count)
         self.prefix, self.exact, self.count, self.path = prefix, exact, count, path
         self.maxlen = max(len(k) for k in prefix)
         self.date = time.strftime('%Y-%m-%d', time.localtime(os.path.getmtime(path)))
         vm = re.search(r'VER(\d{8})', text)
         if vm:
             self.date = '%s-%s-%s' % (vm.group(1)[:4], vm.group(1)[4:6], vm.group(1)[6:])
-        log.info("cty.dat: %d стран, %s (%s)", count, self.date, path)
+        log.info(tr("cty.dat: %d стран, %s (%s)"), count, self.date, path)
 
     def _by_prefix(self, s):
         for n in range(min(len(s), self.maxlen), 0, -1):
@@ -172,16 +174,16 @@ def update_cty(base, on_done=None):
             req = urllib.request.Request(CTY_URL, headers={'User-Agent': 'FTX1-Pult'})
             data = urllib.request.urlopen(req, timeout=25).read()
             if len(data) < 20000 or b'Russia' not in data:
-                raise ValueError('ответ не похож на cty.dat')
+                raise ValueError(tr('ответ не похож на cty.dat'))
             tmp = path + '.tmp'
             with open(tmp, 'wb') as f:
                 f.write(data)
             os.replace(tmp, path)
-            log.info("cty.dat обновлён с country-files.com (%d байт)", len(data))
+            log.info(tr("cty.dat обновлён с country-files.com (%d байт)"), len(data))
             if on_done:
                 on_done(path)
         except Exception as e:
-            log.info("cty.dat не обновился: %s", e)
+            log.info(tr("cty.dat не обновился: %s"), e)
     threading.Thread(target=run, daemon=True).start()
 
 

@@ -3,6 +3,8 @@
 (шум + несколько сигналов) вместо USB-звука. Нужен, чтобы проверить
 пульт без трансивера:  python main.py --sim
 """
+
+from i18n import tr
 import os
 import threading
 import time
@@ -470,7 +472,7 @@ class SimFt8:
                 txt = '%s %s 73' % (me, call)
             else:
                 continue
-            log.info("SIM FT8: %s слышит «%s», ответ «%s»", call, text, txt)
+            log.info(tr("SIM FT8: %s слышит «%s», ответ «%s»"), call, text, txt)
             self._reply(k + 1, call, (a, amp, txt))
 
     def _reply(self, k, call, item):

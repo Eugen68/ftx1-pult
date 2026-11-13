@@ -7,6 +7,8 @@ PSK Reporter (pskreporter.info): отправка принятых станци�
 
 «Где меня слышат» — https://retrieve.pskreporter.info/query (не чаще раза в 5 минут, как просит сайт).
 """
+
+from i18n import tr
 import logging
 import os
 import random
@@ -112,7 +114,7 @@ class PskReporter:
         try:
             addr = socket.gethostbyname(HOST)
         except OSError as e:
-            log.info("PSK Reporter: нет связи с %s (%s)", HOST, e)
+            log.info(tr("PSK Reporter: нет связи с %s (%s)"), HOST, e)
             return
         tpl = self.n_pkt < 3 or time.time() - self.t_tpl > 3600
         ant = str(self.cfg.get('psk_antenna', '') or '')
@@ -135,7 +137,7 @@ class PskReporter:
                     log.info("PSK Reporter: %s", e)
                 chunk = []
                 tpl = False
-        log.info("PSK Reporter: отправлено %d станций", len(spots))
+        log.info(tr("PSK Reporter: отправлено %d станций"), len(spots))
 
     # ------------------------------------------------------------------ где меня слышат
     def query_heard(self, my_call, on_done, minutes=30):
@@ -155,7 +157,7 @@ class PskReporter:
                 self.heard_err = ''
             except Exception as e:
                 self.heard_err = str(e)
-                log.info("PSK Reporter: запрос не удался: %s", e)
+                log.info(tr("PSK Reporter: запрос не удался: %s"), e)
             finally:
                 self.heard_busy = False
                 on_done()

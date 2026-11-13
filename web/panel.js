@@ -15,29 +15,31 @@ function connect() {
   ws.onopen = () => send({ t: 'admin_hello' });
   ws.onclose = () => {
     if (quitting) { $('#gone').classList.remove('hidden'); setTimeout(() => window.close(), 800); return; }
-    setLamp('bad', 'Нет связи с сервером', 'Программа закрыта? Запустите FTX-1 Пульт снова.');
+    setLamp('bad', I18n.t('Нет связи с сервером'), I18n.t('Программа закрыта? Запустите FTX-1 Пульт снова.'));
     setTimeout(connect, 2000);
   };
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     switch (m.t) {
+      case 'language': I18n.sync(m.language); break;
+      case 'language_error': $('#language').value = m.language; toast(m.msg, 5000); break;
       case 'admin_denied':
-        setLamp('bad', 'Панель доступна только на ПК с трансивером', ''); break;
+        setLamp('bad', I18n.t('Панель доступна только на ПК с трансивером'), ''); break;
       case 'admin_init': init(m); break;
       case 'admin_devices': ports = m.ports; audio = m.audio; fillDevices(); renderUrls(m.urls); applyDetectIfEmpty(m.detect); break;
       case 'admin_status': renderStatus(m.s); break;
       case 'admin_log': addLog(m.line); break;
       case 'admin_saved':
         cfg = m.cfg; flashSaved();
-        if (m.port_change) toast('Новые порты заработают после перезапуска программы', 5000);
+        if (m.port_change) toast(I18n.t('Новые порты заработают после перезапуска программы'), 5000);
         break;
       case 'admin_autostart': $('#autostart').checked = !!m.on; break;
       case 'admin_ai': {
         const sel = $('#ai_model'), cur = cfg.ai_model || '';
-        sel.innerHTML = '<option value="">Любая загруженная</option>' + (m.models || []).map(x => `<option>${esc(x)}</option>`).join('');
-        if (cur && !(m.models || []).includes(cur)) sel.add(new Option(cur + ' (не загружена)', cur));
+        sel.innerHTML = I18n.t('<option value="">Любая загруженная</option>') + (m.models || []).map(x => `<option>${esc(x)}</option>`).join('');
+        if (cur && !(m.models || []).includes(cur)) sel.add(new Option(cur + I18n.t(' (не загружена)'), cur));
         sel.value = cur;
-        $('#aiHint').textContent = m.ok ? (m.models.length ? `✓ LM Studio отвечает, моделей: ${m.models.length}` : '⚠ LM Studio отвечает, но модель не загружена') : '⚠ ' + m.msg;
+        $('#aiHint').textContent = m.ok ? (m.models.length ? I18n.t`✓ LM Studio отвечает, моделей: ${m.models.length}` : I18n.t('⚠ LM Studio отвечает, но модель не загружена')) : '⚠ ' + m.msg;
         $('#aiHint').style.color = m.ok && m.models.length ? 'var(--ok)' : 'var(--warn)';
         break;
       }
@@ -47,8 +49,9 @@ function connect() {
 
 // ------------------------------------------------------------ инициализация
 function init(m) {
+  I18n.sync(m.language);
   cfg = m.cfg; ports = m.ports; audio = m.audio;
-  $('#ver').textContent = `версия ${m.version}`;
+  $('#ver').textContent = I18n.t`версия ${m.version}`;
   fillDevices();
   for (const k of ['cat_baud', 'ptt_method', 'max_tx_seconds', 'http_port', 'https_port']) $('#' + k).value = cfg[k];
   for (const k of ['simulate', 'auto_connect', 'open_panel', 'open_pult', 'ai_enabled', 'ai_auto_analyze']) $('#' + k).checked = !!cfg[k];
@@ -66,7 +69,7 @@ function init(m) {
   }
 }
 function applyDetect(d, quiet) {
-  if (!d || !Object.keys(d).length) { if (!quiet) toast('FTX-1 не найден: проверьте кабель, питание и драйвер CP210x', 5000); return; }
+  if (!d || !Object.keys(d).length) { if (!quiet) toast(I18n.t('FTX-1 не найден: проверьте кабель, питание и драйвер CP210x'), 5000); return; }
   if (d.cat_port) $('#cat_port').value = d.cat_port;
   if (d.ptt_port) $('#ptt_port').value = d.ptt_port;
   if (d.audio_in_name) {
@@ -74,7 +77,7 @@ function applyDetect(d, quiet) {
     fillAudio();
   }
   save();
-  if (!quiet) toast('Найдено: ' + [d.cat_port && 'CAT ' + d.cat_port, d.audio_in_name && 'звук ' + d.audio_in_name].filter(Boolean).join(', '));
+  if (!quiet) toast(I18n.t('Найдено: ') + [d.cat_port && 'CAT ' + d.cat_port, d.audio_in_name && I18n.t('звук ') + d.audio_in_name].filter(Boolean).join(', '));
 }
 function applyDetectIfEmpty(d) {
   if (d && ((!cfg.cat_port && d.cat_port) || (!cfg.audio_in_name && d.audio_in_name))) applyDetect(d, true);
@@ -84,13 +87,13 @@ function opt(v, t, sel) { return `<option value="${esc(v)}"${sel ? ' selected' :
 function fillDevices() {
   const portOpts = (cur, prefer) => {
     let h = '';
-    if (!ports.length) h += opt('', '— COM-порты не найдены —', !cur);
-    else if (!cur) h += opt('', '— выберите —', true);
+    if (!ports.length) h += opt('', I18n.t('— COM-порты не найдены —'), !cur);
+    else if (!cur) h += opt('', I18n.t('— выберите —'), true);
     for (const p of ports) {
       const star = p.kind === prefer ? '★ ' : '';
       h += opt(p.device, `${star}${p.device} — ${p.desc}`, p.device === cur);
     }
-    if (cur && !ports.some(p => p.device === cur)) h += opt(cur, `${cur} (сейчас не подключён)`, true);
+    if (cur && !ports.some(p => p.device === cur)) h += opt(cur, I18n.t`${cur} (сейчас не подключён)`, true);
     return h;
   };
   $('#cat_port').innerHTML = portOpts(cfg.cat_port, 'enhanced');
@@ -115,13 +118,13 @@ function fillAudio() {
   const both = [...cores.values()].filter(e => e.in && e.out);
   both.sort((a, b) => isCodec(b.name) - isCodec(a.name));
   const cur = cfg.audio_in_name ? coreName(cfg.audio_in_name) : '';
-  let h = opt('', 'Автоматически (USB Audio CODEC/Device)', !cur), found = !cur;
+  let h = opt('', I18n.t('Автоматически (USB Audio CODEC/Device)'), !cur), found = !cur;
   for (const e of both) {
     const sel = !!cur && e.name.toLowerCase() === cur.toLowerCase();
     if (sel) found = true;
-    h += opt(e.name, (isCodec(e.name) ? '★ ' : '') + e.name + (isCodec(e.name) ? ' — трансивер' : ''), sel);
+    h += opt(e.name, (isCodec(e.name) ? '★ ' : '') + e.name + (isCodec(e.name) ? I18n.t(' — трансивер') : ''), sel);
   }
-  if (!found) h += opt(cur, cur + ' (не найдено)', true);
+  if (!found) h += opt(cur, cur + I18n.t(' (не найдено)'), true);
   $('#audio_dev').innerHTML = h;
   $('#audio_api').value = cfg.audio_api || '';
   if ($('#audio_api').value !== (cfg.audio_api || '')) $('#audio_api').value = '';
@@ -130,9 +133,9 @@ function fillAudio() {
 function audioHint(st) {
   const d = $('#audio_dev').value;
   let t = '';
-  if (d && !isCodec(d)) t = '⚠ Выбрано не USB-устройство трансивера.';
-  else if (!audio.some(x => isCodec(x.name))) t = '⚠ USB-звук трансивера не виден: проверьте кабель и нажмите ↻.';
-  else if (st && st.audio_api_used) t = 'Сейчас звук идёт через ' + st.audio_api_used.replace('Windows ', '') + '.';
+  if (d && !isCodec(d)) t = I18n.t('⚠ Выбрано не USB-устройство трансивера.');
+  else if (!audio.some(x => isCodec(x.name))) t = I18n.t('⚠ USB-звук трансивера не виден: проверьте кабель и нажмите ↻.');
+  else if (st && st.audio_api_used) t = I18n.t('Сейчас звук идёт через ') + st.audio_api_used.replace('Windows ', '') + '.';
   $('#audioHint').textContent = t;
 }
 $('#audio_dev').addEventListener('change', () => audioHint());
@@ -156,7 +159,7 @@ function collect() {
 function save() { clearTimeout(saveT); saveT = setTimeout(() => send({ t: 'admin_save', cfg: collect() }), 350); }
 function flashSaved() { const s = $('#saved'); s.classList.add('show'); clearTimeout(s.t); s.t = setTimeout(() => s.classList.remove('show'), 1500); }
 document.querySelectorAll('select, input').forEach(el => {
-  if (el.id === 'autostart') return;
+  if (['autostart', 'language'].includes(el.id)) return;
   el.addEventListener(el.matches('input[type=text], input[type=password], input[type=number]') ? 'input' : 'change', () => {
     pttPortVisibility(); pwHint(); save();
   });
@@ -165,11 +168,11 @@ function pttPortVisibility() {
   $('#pttPortField').classList.toggle('hidden', !/RTS|DTR/.test($('#ptt_method').value));
   $('#cwPortField').classList.toggle('hidden', $('#cw_method').value === 'cat');
 }
-$('#aiTest').onclick = () => { clearTimeout(saveT); send({ t: 'admin_save', cfg: collect() }); setTimeout(() => send({ t: 'admin_ai' }), 300); $('#aiHint').textContent = 'Проверяю…'; };
+$('#aiTest').onclick = () => { clearTimeout(saveT); send({ t: 'admin_save', cfg: collect() }); setTimeout(() => send({ t: 'admin_ai' }), 300); $('#aiHint').textContent = I18n.t('Проверяю…'); };
 function pwHint() {
   const pw = $('#password').value;
-  $('#pwHint').textContent = !pw ? '⚠ Пароль не задан — с телефона войти нельзя (это безопасно, но неудобно).'
-    : pw.length < 6 ? '⚠ Короткий пароль — лучше 6+ символов.' : '';
+  $('#pwHint').textContent = !pw ? I18n.t('⚠ Пароль не задан — с телефона войти нельзя (это безопасно, но неудобно).')
+    : pw.length < 6 ? I18n.t('⚠ Короткий пароль — лучше 6+ символов.') : '';
 }
 $('#pwShow').onclick = () => { const p = $('#password'); p.type = p.type === 'password' ? 'text' : 'password'; };
 $('#pwGen').onclick = () => {
@@ -177,8 +180,14 @@ $('#pwGen').onclick = () => {
   $('#password').value = [...r].map(x => a[x % a.length]).join('');
   $('#password').type = 'text'; pwHint(); save();
 };
+$('#language').onchange = e => {
+  if (!ws || ws.readyState !== 1) { e.target.value = I18n.language; return; }
+  clearTimeout(saveT);
+  send({ t: 'admin_save', cfg: collect() });
+  send({ t: 'set_language', language: e.target.value });
+};
 $('#autostart').onchange = e => send({ t: 'admin_autostart', on: e.target.checked });
-$('#btnRefresh').onclick = () => { send({ t: 'admin_refresh' }); toast('Обновляю список устройств…', 1200); };
+$('#btnRefresh').onclick = () => { send({ t: 'admin_refresh' }); toast(I18n.t('Обновляю список устройств…'), 1200); };
 $('#btnDetect').onclick = () => {
   send({ t: 'admin_refresh' });
   const h = e => { const m = JSON.parse(e.data); if (m.t === 'admin_devices') { ws.removeEventListener('message', h); applyDetect(m.detect, false); } };
@@ -191,7 +200,7 @@ $('#btnRun').onclick = () => {
 $('#btnPult').onclick = () => send({ t: 'admin_open_pult' });
 $('#btnFolder').onclick = () => send({ t: 'admin_open_folder' });
 $('#btnQuit').onclick = () => {
-  if (!confirm('Выйти из программы? Связь с трансивером будет остановлена, пульты отключатся.')) return;
+  if (!confirm(I18n.t('Выйти из программы? Связь с трансивером будет остановлена, пульты отключатся.'))) return;
   quitting = true; send({ t: 'admin_quit' });
 };
 
@@ -205,37 +214,37 @@ function renderStatus(s) {
   const b = $('#btnRun');
   b.disabled = s.busy;
   b.className = 'btn ' + (s.running ? 'stop' : 'go');
-  b.textContent = s.busy ? '… Подождите' : s.running ? '■ Остановить' : '▶ Запустить';
-  if (s.busy) setLamp('warn', 'Подключаюсь…', '');
-  else if (!s.running) setLamp(s.error ? 'bad' : '', s.error ? 'Связь не установлена' : 'Связь с трансивером остановлена',
-    s.error ? '' : 'Нажмите «Запустить»');
-  else if (s.tx) setLamp('tx', 'ПЕРЕДАЧА', s.ptt_owner ? 'с ' + s.ptt_owner : '');
-  else if (s.connected) setLamp('ok', s.sim ? 'Работает (симулятор)' : 'Трансивер на связи',
-    [s.radio_id === '0840' ? 'FTX-1' : '', s.head === 2 ? 'Optima/SPA-1' : s.head === 1 ? 'Field' : '', s.fw ? 'прошивка ' + s.fw : ''].filter(Boolean).join(' · '));
-  else setLamp('warn', 'Трансивер не отвечает', 'Включён? Тот ли COM-порт и скорость CAT?');
+  b.textContent = s.busy ? I18n.t('… Подождите') : s.running ? I18n.t('■ Остановить') : I18n.t('▶ Запустить');
+  if (s.busy) setLamp('warn', I18n.t('Подключаюсь…'), '');
+  else if (!s.running) setLamp(s.error ? 'bad' : '', s.error ? I18n.t('Связь не установлена') : I18n.t('Связь с трансивером остановлена'),
+    s.error ? '' : I18n.t('Нажмите «Запустить»'));
+  else if (s.tx) setLamp('tx', I18n.t('ПЕРЕДАЧА'), s.ptt_owner ? I18n.t('с ') + s.ptt_owner : '');
+  else if (s.connected) setLamp('ok', s.sim ? I18n.t('Работает (симулятор)') : I18n.t('Трансивер на связи'),
+    [s.radio_id === '0840' ? 'FTX-1' : '', s.head === 2 ? 'Optima/SPA-1' : s.head === 1 ? 'Field' : '', s.fw ? I18n.t('прошивка ') + s.fw : ''].filter(Boolean).join(' · '));
+  else setLamp('warn', I18n.t('Трансивер не отвечает'), I18n.t('Включён? Тот ли COM-порт и скорость CAT?'));
   $('#stFreq').textContent = s.running && s.connected && s.freq ? `${fmtF(s.freq)}  ${s.mode || ''}` : '';
   const err = $('#stErr');
-  err.textContent = s.error || (s.running && s.audio_err ? 'Звук: ' + s.audio_err : '');
+  err.textContent = s.error || (s.running && s.audio_err ? I18n.t('Звук: ') + s.audio_err : '');
   err.classList.toggle('hidden', !err.textContent);
   $('#cCat').className = s.running ? (s.connected ? 'ok' : 'warn') : '';
   $('#cAudio').className = s.running ? (s.audio_ok ? 'ok' : 'bad') : '';
   if (s.audio_api_used !== undefined && document.activeElement !== $('#audio_dev')) audioHint(s);
   $('#cTx').className = s.tx ? 'bad' : (s.running ? 'ok' : '');
-  $('#cTxT').textContent = s.tx ? 'Передача' : 'Приём';
+  $('#cTxT').textContent = s.tx ? I18n.t('Передача') : I18n.t('Приём');
   $('#cCl').className = s.clients.length ? 'ok' : '';
-  $('#cClT').textContent = 'Пультов: ' + s.clients.length;
+  $('#cClT').textContent = I18n.t('Пультов: ') + s.clients.length;
   $('#clCount').textContent = s.clients.length ? `(${s.clients.length})` : '';
   $('#clients').innerHTML = s.clients.length ? s.clients.map(c =>
     `<div class="cl">${c.tx ? '🔴' : c.local ? '🖥' : '📱'} <span>${esc(c.name.split(':')[0])}</span>
-     <span class="muted small">${c.local ? 'этот ПК' : 'по сети'}${c.audio ? ' · звук' : ''}${c.tx ? ' · ПЕРЕДАЁТ' : ''}</span></div>`).join('')
-    : '<span class="muted small">Никого</span>';
-  document.title = (s.tx ? '🔴 ' : '') + 'FTX-1 Пульт — сервер';
+     <span class="muted small">${c.local ? I18n.t('этот ПК') : I18n.t('по сети')}${c.audio ? I18n.t(' · звук') : ''}${c.tx ? I18n.t(' · ПЕРЕДАЁТ') : ''}</span></div>`).join('')
+    : I18n.t('<span class="muted small">Никого</span>');
+  document.title = (s.tx ? '🔴 ' : '') + I18n.t('FTX-1 Пульт — сервер');
 }
 function renderUrls(urls) {
-  $('#urls').innerHTML = urls.map(u => `<div class="url"><span title="${u.kind === 'local' ? 'на этом ПК' : 'для телефона и других ПК'}">${u.kind === 'local' ? '🖥' : '📱'}</span>
+  $('#urls').innerHTML = urls.map(u => I18n.t`<div class="url"><span title="${u.kind === 'local' ? I18n.t('на этом ПК') : I18n.t('для телефона и других ПК')}">${u.kind === 'local' ? '🖥' : '📱'}</span>
     <code>${esc(u.url)}</code><button class="btn small" data-copy="${esc(u.url)}">Копировать</button></div>`).join('');
   document.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => {
-    navigator.clipboard.writeText(b.dataset.copy).then(() => toast('Скопировано'), () => toast(b.dataset.copy));
+    navigator.clipboard.writeText(b.dataset.copy).then(() => toast(I18n.t('Скопировано')), () => toast(b.dataset.copy));
   });
   const lan = urls.find(u => u.kind === 'lan');
   $('#qrbox').classList.toggle('hidden', !lan || typeof qrcode !== 'function');

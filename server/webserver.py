@@ -2,6 +2,8 @@
 Мини HTTP/HTTPS + WebSocket (RFC 6455) сервер на asyncio без внешних библиотек.
 Отдаёт статику веб-пульта и держит WebSocket /ws.
 """
+
+from i18n import tr
 import asyncio
 import base64
 import hashlib
@@ -187,7 +189,7 @@ class WebServer:
         except (asyncio.TimeoutError, ConnectionError, asyncio.IncompleteReadError, ValueError):
             pass
         except Exception as e:
-            log.debug("HTTP ошибка %s: %s", peer, e)
+            log.debug(tr("HTTP ошибка %s: %s"), peer, e)
         finally:
             try:
                 writer.close()
