@@ -45,8 +45,9 @@ from digidesk import DigiDesk  # noqa: E402
 from voicecq import VoiceCq  # noqa: E402
 from recorder import QsoRecorder  # noqa: E402
 from ft8 import Ft8Desk  # noqa: E402
+from memory import MemoryDesk  # noqa: E402
 
-VERSION = "2.7"
+VERSION = "2.8"
 APP_NAME = "FTX-1 Пульт"
 log = logging.getLogger("main")
 IS_WIN = sys.platform == 'win32'
@@ -313,6 +314,7 @@ class Station:
         self.vk = VoiceCq(self, BASE)
         self.rec = QsoRecorder(BASE)
         self.ft = Ft8Desk(self, BASE, VERSION, RES)
+        self.mem = MemoryDesk(self, BASE)
         LOGBUF.listeners.append(self._on_log)
 
     def save_cfg(self):
@@ -735,6 +737,9 @@ class Station:
             else:
                 self.broadcast(self.rec_state())
             return
+        if t.startswith('mem_'):
+            await self.mem.on_msg(c, m)
+            return
         if t.startswith('ft_'):
             await self.ft.on_msg(c, m)
             return
@@ -967,7 +972,7 @@ def selftest(path):
     except Exception as e:
         ok = False
         rep.append('FAIL audio: %s' % e)
-    for f in ('index.html', 'app.js', 'app.css', 'worklets.js', 'panel.html', 'panel.js', 'qrcode.js',
+    for f in ('index.html', 'app.js', 'mem.js', 'app.css', 'worklets.js', 'panel.html', 'panel.js', 'qrcode.js',
               'manifest.webmanifest', 'sw.js', 'icon-192.png'):
         p = os.path.join(web_dir(), f)
         good = os.path.isfile(p)

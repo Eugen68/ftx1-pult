@@ -152,6 +152,7 @@ function connect() {
         else if (m.t && /^(nx_|psk_|sstv_)/.test(m.t)) digi2.on(m);
         else if (m.t && m.t.startsWith('vk_')) voiceCq.on(m);
         else if (m.t && m.t.startsWith('ft_')) ft8Desk.on(m);
+        else if (m.t && m.t.startsWith('mem_') && typeof memEd !== 'undefined') memEd.on(m);
         else if (m.t === 'rec_state') qsoRec.on(m);
     }
   };

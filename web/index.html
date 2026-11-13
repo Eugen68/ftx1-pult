@@ -226,6 +226,7 @@
         <button class="btn" data-act="mem_mode">Режим памяти</button>
         <input id="memCh" type="number" min="1" max="999" value="1" class="num">
         <button class="btn" id="btnMemCh">Вызвать канал</button>
+        <button class="btn primary" id="btnMemEd" title="Чтение, правка и запись всех каналов памяти — как ADMS / RT Systems">Редактор каналов…</button>
         <button class="btn" data-act="qmb_store">QMB запомнить</button>
         <button class="btn" data-act="qmb_recall">QMB вызвать</button>
         <button class="btn" id="btnLock">LOCK</button>
@@ -628,6 +629,82 @@
   </div>
 </div>
 <div id="toast" class="toast"></div>
+
+<div id="memEd" class="memed hidden" role="dialog" aria-label="Редактор каналов памяти">
+  <div class="me-top">
+    <b class="me-title">Каналы памяти FTX-1</b>
+    <span class="muted small" id="meFile">не сохранено</span>
+    <span class="spacer"></span>
+    <button class="btn" id="meClose" title="Закрыть (изменения сохранятся как черновик)">✕</button>
+  </div>
+  <div class="me-tools">
+    <div class="me-grp">
+      <button class="btn primary" id="meRead" title="Прочитать каналы из трансивера">⬇ Прочитать</button>
+      <label class="mini">с<input type="number" id="meFrom" class="num" min="1" max="99" value="1"></label>
+      <label class="mini">по<input type="number" id="meTo" class="num" min="1" max="99" value="99"></label>
+      <label class="chk mini" title="Номер тона CTCSS / код DCS: трансивер на мгновение переключается на каждый канал с тоном"><input type="checkbox" id="meTones" checked> тоны</label>
+      <label class="chk mini" title="Каналы PMS (границы сканирования P-01L…P-09U)"><input type="checkbox" id="mePms"> PMS</label>
+    </div>
+    <div class="me-grp">
+      <button class="btn tx-on" id="meWrite" title="Записать в трансивер изменённые каналы">⬆ Записать изменённые <span id="meDirtyN">0</span></button>
+      <button class="btn" id="meWriteSel" title="Записать в трансивер отмеченные каналы">⬆ Отмеченные</button>
+      <button class="btn danger hidden" id="meStop">■ Стоп</button>
+    </div>
+    <div class="me-grp">
+      <select id="meFiles" title="Сохранённые наборы каналов на ПК"><option value="">Файлы…</option></select>
+      <button class="btn" id="meSave" title="Сохранить набор на ПК">Сохранить</button>
+      <button class="btn" id="meSaveAs">Сохранить как…</button>
+      <button class="btn" id="meDelFile" title="Удалить выбранный файл">🗑</button>
+    </div>
+    <div class="me-grp">
+      <label class="btn" title="CSV: свой формат или из CHIRP">Импорт CSV<input type="file" id="meCsvIn" accept=".csv,.txt" hidden></label>
+      <button class="btn" id="meCsvOut">Экспорт CSV</button>
+    </div>
+  </div>
+  <div class="me-prog hidden" id="meProg"><i></i><span></span></div>
+  <div class="me-body">
+    <aside class="me-side">
+      <div class="me-side-h">Группы</div>
+      <div id="meGroups"></div>
+      <div class="me-addgrp"><input id="meNewGrp" class="text" maxlength="30" placeholder="новая группа"><button class="btn small" id="meAddGrp">+</button></div>
+      <div class="me-side-h">Показать</div>
+      <label class="chk mini"><input type="checkbox" id="meShowEmpty" checked> пустые каналы</label>
+      <label class="chk mini"><input type="checkbox" id="meOnlyDirty"> только изменённые</label>
+      <input id="meSearch" class="text" placeholder="поиск: имя, частота">
+    </aside>
+    <div class="me-main">
+      <div class="me-tablewrap">
+        <table class="me-table">
+          <thead><tr>
+            <th><input type="checkbox" id="meAll" title="Отметить все видимые"></th>
+            <th>№</th><th>Группа</th><th>Название <small>(12)</small></th><th>Частота, МГц</th><th>Вид</th>
+            <th title="Направление сдвига для ретранслятора">Сдвиг</th><th title="Величина разноса. В трансивере хранится только направление, величина — из меню FM RPT SHIFT">Разнос, кГц</th>
+            <th title="Частота передачи с учётом сдвига">TX, МГц</th><th>Тон</th><th>CTCSS, Гц</th><th>DCS</th>
+            <th title="Расстройка (кларифайер)">Клар, Гц</th><th title="Клар на приём">RX</th><th title="Клар на передачу">TX</th>
+            <th>Заметка</th><th></th>
+          </tr></thead>
+          <tbody id="meRows"></tbody>
+        </table>
+      </div>
+      <div class="me-bottom">
+        <span class="muted small" id="meSelInfo">Отмечено: 0</span>
+        <select id="meSetGrp"><option value="">Группа для отмеченных…</option></select>
+        <button class="btn small" id="meFromVfo" title="Частоту и вид текущего VFO — в первый отмеченный (или первый пустой) канал">← с VFO</button>
+        <button class="btn small" id="meMove" title="Перенести отмеченные каналы на новые номера">Перенести на №…</button>
+        <button class="btn small" id="meSort" title="Отсортировать занятые каналы по частоте, начиная с первого отмеченного номера">Сортировать по частоте</button>
+        <button class="btn small" id="meClear" title="Очистить отмеченные в таблице (в трансивере очистка — только с самого трансивера)">Очистить</button>
+        <button class="btn small" id="meUndo" title="Вернуть отмеченные к прочитанному из трансивера">Отменить правки</button>
+        <span class="spacer"></span>
+        <span class="muted small" id="meStatus"></span>
+      </div>
+      <p class="muted small me-note">Запись идёт через VFO-B (команда MW в прошивке FTX-1 не работает): частота и вид VFO-B после записи возвращаются.
+        Ограничения прошивки: код DCS и флаг TX-клара в канал не сохраняются, очистить канал по CAT нельзя.
+        Разнос в трансивере задаётся общим для диапазона (меню FM → RPT SHIFT), в канале хранится только направление сдвига.
+        Группы — в файле редактора и в CSV, трансивер их не хранит.</p>
+    </div>
+  </div>
+</div>
 <script src="app.js"></script>
+<script src="mem.js"></script>
 </body>
 </html>

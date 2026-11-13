@@ -332,6 +332,14 @@ class Rig:
             cmd += ';'
         self._q.put_nowait(cmd)
 
+    async def exec_seq(self, cmds, timeout=20.0):
+        """Выполнить команды подряд, без опроса между ними; вернуть ответы (None для команд установки,
+        '?' — если трансивер отказал в запросе)."""
+        cmds = [c if c.endswith(';') else c + ';' for c in cmds]
+        fut = self.loop.create_future()
+        self._q.put_nowait(('seq', cmds, fut))
+        return await asyncio.wait_for(fut, timeout)
+
     def add_raw_listener(self, cb):
         self._raw_listeners.append(cb)
 
@@ -376,7 +384,7 @@ class Rig:
         rx = {'AG': 3, 'RG': 3, 'SQ': 3, 'SM': 3, 'RM': 3, 'MD': 3, 'NL': 3, 'RL': 3, 'BC': 3,
               'BP': 4, 'CO': 4, 'IS': 3, 'SH': 3, 'GT': 3, 'PA': 3, 'RA': 3, 'NA': 3, 'PR': 3,
               'ML': 3, 'CF': 5, 'CT': 3, 'CN': 4, 'OS': 3, 'VE': 3, 'EX': 8, 'SS': 4, 'SC': 3,
-              'MC': 3, 'VM': 3, 'MR': 7, 'MT': 7, 'RI': 3}
+              'MC': 3, 'VM': 3, 'MR': 7, 'MT': 7, 'MZ': 7, 'RI': 3}
         n = rx.get(c[:2])
         return n is not None and len(c) == n
 
@@ -396,6 +404,20 @@ class Rig:
                 # 1) команды пользователя — всегда первыми
                 while not self._q.empty():
                     cmd = self._q.get_nowait()
+                    if isinstance(cmd, tuple):        # последовательность команд одним куском (память и т. п.)
+                        _, seq, fut = cmd
+                        res = []
+                        try:
+                            for c in seq:
+                                if c.startswith('~'):     # пауза, мс (дать трансиверу ответить «?» на прошлую команду)
+                                    await asyncio.sleep(int(c[1:-1]) / 1000)
+                                    res.append(None)
+                                    continue
+                                res.append(await self._xfer(c))
+                        finally:
+                            if not fut.done():
+                                fut.set_result(res)
+                        continue
                     if cmd.startswith('@'):           # частота: только последнее значение (ручка крутится быстрее, чем отвечает трансивер)
                         key = cmd[1:-1]
                         val = self._freq_pend.pop(key, None)
@@ -654,7 +676,7 @@ class Rig:
             'atas_tune': ['AC123;'], 'atas_up': ['AC121;'], 'atas_down': ['AC122;'], 'atas_stop': ['AC120;'],
             'zero_in': ['ZI0;'], 'spot_on': ['CS1;'], 'spot_off': ['CS0;'],
             'scan_up': ['SC01;'], 'scan_down': ['SC02;'], 'scan_stop': ['SC00;'],
-            'vfo_mode': ['VM00;'], 'mem_mode': ['VM01;'], 'qmb_store': ['QI;'], 'qmb_recall': ['QR;'],
+            'vfo_mode': ['VM000;'], 'mem_mode': ['MC0%05d;' % int(self.state.get('mem_ch') or 1)], 'qmb_store': ['QI;'], 'qmb_recall': ['QR;'],
             'clar_clear': ['CF001+0000;'],
         }.get(name)
         if name == 'band' and arg is not None:
@@ -668,7 +690,7 @@ class Rig:
         elif name == 'voice_play' and arg is not None:
             a = ['PB0%d;' % int(arg)]
         elif name == 'mem_ch' and arg is not None:
-            a = ['MC0%03d;' % int(arg)]
+            a = ['MC0%05d;' % int(arg)]    # MC0nnnnn — канал на MAIN (формат проверен в Hamlib)
         elif name == 'power_off':
             a = ['PS0;']
         if a:
