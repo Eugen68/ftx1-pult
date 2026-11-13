@@ -143,8 +143,10 @@ class WebSocket:
             self.w.close()
             try:
                 await asyncio.wait_for(self.w.wait_closed(), 0.5)
-            except Exception:
-                pass
+            except (Exception, asyncio.CancelledError):
+                transport = getattr(self.w, 'transport', None)
+                if transport is not None:
+                    transport.abort()
 
 
 class WebServer:
@@ -228,6 +230,12 @@ class WebServer:
             self.handlers.discard(task)
             try:
                 writer.close()
+                # A cancelled download may still have a large write buffer.
+                # Abort it on shutdown instead of leaving wait_closed blocked.
+                if task.cancelling():
+                    transport = getattr(writer, 'transport', None)
+                    if transport is not None:
+                        transport.abort()
             except Exception:
                 pass
 

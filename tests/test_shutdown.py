@@ -172,6 +172,10 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
 class Writer:
     def __init__(self, slow=False):
         self.slow, self.closed, self.frames = slow, False, []
+        self.aborted = False
+        self.transport = SimpleNamespace(abort=self.abort)
+    def abort(self):
+        self.aborted = True
     def get_extra_info(self, key):
         return ('127.0.0.1', 12345) if key == 'peername' else None
     def write(self, data):
@@ -182,7 +186,8 @@ class Writer:
     def close(self):
         self.closed = True
     async def wait_closed(self):
-        pass
+        if self.slow:
+            await asyncio.Event().wait()
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
@@ -193,6 +198,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(asyncio.gather(ws.close(), ws.close()), 1.5)
         self.assertTrue(writer.closed)
         self.assertTrue(ws._sender.done())
+        self.assertTrue(writer.aborted)
 
     async def test_server_close_cancels_pending_http_connections(self):
         app, reader, writer = WebServer(ROOT / 'web', None), asyncio.StreamReader(), Writer()
@@ -202,6 +208,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(task.cancelled())
         self.assertTrue(writer.closed)
         self.assertFalse(app.handlers)
+        self.assertTrue(writer.aborted)
 
 
 class ProcessTests(unittest.TestCase):
