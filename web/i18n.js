@@ -49,21 +49,45 @@ const I18n = (() => {
     remember(value);
     if (value !== language) location.reload();
   }
+  function savedLanguage() {
+    try {
+      const value = localStorage.getItem('ftx1.language');
+      return ['ru', 'en'].includes(value) ? value : 'ru';
+    } catch { return 'ru'; }
+  }
+  async function fetchJson(url, options = {}) {
+    const controller = new AbortController();
+    let timer;
+    try {
+      // Race as well as abort: startup must not depend on an unresponsive network.
+      return await Promise.race([
+        fetch(url, { ...options, signal: controller.signal }).then(r => {
+          if (!r.ok) throw Error('Interface resource unavailable');
+          return r.json();
+        }),
+        new Promise((_, reject) => { timer = setTimeout(() => {
+          controller.abort(); reject(Error('Interface request timed out'));
+        }, 4000); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
   async function start() {
     try {
       const [catalogue, settings] = await Promise.all([
-        fetch('locales/en.json').then(r => { if (!r.ok) throw Error('Translation catalogue unavailable'); return r.json(); }),
-        fetch('api/language', { cache: 'no-store' }).then(r => {
-          if (!r.ok) throw Error('Language setting unavailable');
-          return r.json();
-        }).catch(() => {
-          let saved = 'ru';
-          try { saved = localStorage.getItem('ftx1.language') || 'ru'; } catch { }
-          return { language: saved };
+        fetchJson('locales/en.json').then(value => {
+          try { localStorage.setItem('ftx1.english', JSON.stringify(value)); } catch {}
+          return value;
+        }).catch(error => {
+          try {
+            const cached = JSON.parse(localStorage.getItem('ftx1.english'));
+            if (cached && typeof cached === 'object' && !Array.isArray(cached)) return cached;
+          } catch {}
+          throw error;
         }),
+        fetchJson('api/language', { cache: 'no-store' }).catch(() => ({ language: savedLanguage() })),
       ]);
       english = catalogue;
-      language = ['ru', 'en'].includes(settings.language) ? settings.language : 'ru';
+      language = ['ru', 'en'].includes(settings.language) ? settings.language : savedLanguage();
       remember(language);
       localize();
       document.documentElement.classList.remove('i18n-loading');
@@ -76,7 +100,11 @@ const I18n = (() => {
       document.documentElement.classList.remove('i18n-loading');
       const notice = document.createElement('p');
       notice.textContent = 'Could not load the interface. Reload the page. / Не удалось загрузить интерфейс. Обновите страницу.';
-      document.body.prepend(notice);
+      // Do not expose the untranslated source UI when English assets fail to load.
+      const retry = document.createElement('button');
+      retry.textContent = 'Retry / Повторить';
+      retry.onclick = () => location.reload();
+      document.body.replaceChildren(notice, retry);
       console.error(error);
     }
   }
