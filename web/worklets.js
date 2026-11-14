@@ -25,6 +25,7 @@ class RxPlayer extends AudioWorkletProcessor {
     super();
     this.gain = 1; this.mute = false;
     this.ring = new Float32Array(sampleRate * 4);
+    this.baseMs = 240; this.targetMs = this.baseMs;
     this.setRate(16000);
     this.statT = 0; this.underruns = 0;
     // шумодав: решение принимается по мере поступления звука (синхронно с ним)
@@ -35,6 +36,7 @@ class RxPlayer extends AudioWorkletProcessor {
       if (m.pcm) this.push(this.squelch(m.pcm));
       else if (m.gate) Object.assign(this.gate, m.gate);
       else if (m.rate) this.setRate(m.rate);
+      else if (m.bufferMs) this.setBuffer(m.bufferMs);
       else if ('gain' in m) this.gain = m.gain;
       else if ('mute' in m) this.mute = m.mute;
       else if (m.reset) this.reset();
@@ -51,10 +53,18 @@ class RxPlayer extends AudioWorkletProcessor {
     this.taps = taps;
     this.hist = new Float32Array(taps);
     this.hpos = 0;
-    this.target = Math.round(this.midRate * 0.12);     // целевая задержка 120 мс
+    this.target = Math.round(this.midRate * this.targetMs / 1000);
+    this.reset();
+  }
+  setBuffer(ms) {
+    if (![120, 240, 400].includes(ms)) return;
+    this.baseMs = ms;
+    this.targetMs = ms;
+    this.target = Math.round(this.midRate * ms / 1000);
     this.reset();
   }
   reset() {
+    this.stableFrames = 0;
     this.w = 0; this.r = 0; this.fill = 0; this.frac = 0;
     this.buffering = true; this.err = 0;
   }
@@ -123,7 +133,14 @@ class RxPlayer extends AudioWorkletProcessor {
     const g = this.mute ? 0 : this.gain;
     const ring = this.ring;
     for (let i = 0; i < out.length; i++) {
-      if (this.fill < 4) { out.fill(0, i); this.buffering = true; this.underruns++; break; }
+      if (this.fill < 4) {
+        out.fill(0, i); this.buffering = true; this.underruns++;
+        // Repeated gaps need more reserve, rather than identical short refills.
+        this.targetMs = Math.min(600, this.targetMs + 40);
+        this.target = Math.round(this.midRate * this.targetMs / 1000);
+        this.stableFrames = 0;
+        break;
+      }
       const r = this.r, t = this.frac;
       const y0 = ring[(r + R - 1) % R], y1 = ring[r], y2 = ring[(r + 1) % R], y3 = ring[(r + 2) % R];
       // кубическая интерполяция (Катмулл-Ром)
@@ -135,10 +152,19 @@ class RxPlayer extends AudioWorkletProcessor {
       while (this.frac >= 1) { this.frac -= 1; this.r = (this.r + 1) % R; this.fill--; }
     }
     for (let ch = 1; ch < outputs[0].length; ch++) outputs[0][ch].set(out);
+    if (!this.buffering) {
+      this.stableFrames += out.length;
+      // Give latency back slowly only after a full minute without starvation.
+      if (this.stableFrames >= sampleRate * 60) {
+        this.stableFrames = 0;
+        this.targetMs = Math.max(this.baseMs, this.targetMs - 20);
+        this.target = Math.round(this.midRate * this.targetMs / 1000);
+      }
+    }
     this.statT += out.length;
     if (this.statT >= sampleRate) {
       this.statT = 0;
-      this.port.postMessage({ stat: { ms: Math.round(this.fill / this.midRate * 1000), under: this.underruns, adj } });
+      this.port.postMessage({ stat: { ms: Math.round(this.fill / this.midRate * 1000), under: this.underruns, target: this.targetMs, adj } });
     }
     if (this.statT % 4800 < out.length) {             // ~10 раз в секунду: уровень и состояние шумодава
       this.port.postMessage({ sq: { lvl: this.lvl, open: this.gGain > 0.5 } });

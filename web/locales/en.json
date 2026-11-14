@@ -1232,5 +1232,12 @@
   "Задержка BK": "BK delay",
   "⏻ Выйти": "⏻ Exit",
   "Кнопка X закрывает только окно. Чтобы остановить сервер, нажмите «Выйти».": "The X button closes only this window. To stop the server, click Exit.",
-  "Сервер остановлен — после запуска обновите страницу": "Server stopped — reload this page after restarting it"
+  "Сервер остановлен — после запуска обновите страницу": "Server stopped — reload this page after restarting it",
+  "Буфер приёма": "Receive buffer",
+  "120 мс — минимальная задержка": "120 ms — low latency",
+  "240 мс — сбалансированный": "240 ms — balanced",
+  "400 мс — нестабильная сеть": "400 ms — unstable network",
+  "При пропусках буфер автоматически увеличивается до 600 мс. Больший буфер повышает устойчивость, но задерживает звук.": "On underruns, the buffer grows automatically up to 600 ms. A larger buffer improves stability but adds audio delay.",
+  "(целевой буфер:": "(target buffer:",
+  "мс)": "ms)"
 }

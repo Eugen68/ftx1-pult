@@ -277,6 +277,12 @@ Select **English** in the server panel or the remote control's **Settings** tab.
 Receive audio uses a media player with lock-screen Play/Pause controls where supported.
 Enable audio while the app is visible before locking the screen. Background playback depends on
 the phone, browser, and battery restrictions; continuous reception during standby still requires testing on a real device.
+Under **Settings → Receive buffer**, choose 120 ms for low latency, 240 ms (the default)
+for balanced playback, or 400 ms for an unstable connection. After buffer underruns, the player
+increases its target in 40 ms steps, up to 600 ms, then reduces it gradually after stable playback.
+The audio status shows the current buffer, target, and underrun count. More buffering trades
+additional receive delay for resistance to brief delivery gaps; it cannot cover a prolonged outage.
+
 PTT is released when the interface becomes hidden. On returning from standby, the client probes
 the connection and reconnects if necessary, restoring enabled reception. The last selected language
 and English catalogue are cached locally for temporary network outages.

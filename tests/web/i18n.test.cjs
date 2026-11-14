@@ -292,3 +292,18 @@ test('language API returning no valid language preserves the saved choice', asyn
   try { assert.equal(dom.window.document.documentElement.lang, 'en'); }
   finally { dom.window.close(); }
 });
+
+test('receive buffer selection is sent to the player and saved on this device', async () => {
+  let audio;
+  const { dom } = await open('index.html', 'en', false, false, w => { audio = mockAudio(w); });
+  try {
+    const w = dom.window;
+    await w.eval('setReceiveAudio(true)');
+    assert.ok(audio.packets.some(m => m.bufferMs === 240));
+    const select = w.document.querySelector('#optRxBuffer');
+    select.value = '400';
+    select.dispatchEvent(new w.Event('change'));
+    assert.equal(audio.packets.at(-1).bufferMs, 400);
+    assert.equal(JSON.parse(w.localStorage.getItem('ftx1.opts')).rxBuffer, 400);
+  } finally { dom.window.close(); }
+});

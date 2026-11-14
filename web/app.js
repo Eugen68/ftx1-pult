@@ -72,7 +72,7 @@ const C = {                         // состояние клиента
   span: 4000, bw: 0,                      // действующий обзор и измеренная полоса звука трансивера
 };
 const opts = Object.assign({ echo: false, ns: false, agc: false, muteTx: true, pttMode: 'hold', space: true, palette: 'classic', micGain: 100, micId: '',
-  sqMode: 'radio', sqThr: -60, tail: 500, scale: 'auto', hotkeys: true }, store.get('opts', {}));
+  sqMode: 'radio', sqThr: -60, tail: 500, rxBuffer: 240, scale: 'auto', hotkeys: true }, store.get('opts', {}));
 if ((opts.v | 0) < 2) {           // 1.8: обработка браузера для эфира по умолчанию выключена (портила голос)
   opts.echo = false; opts.ns = false; opts.agc = false; opts.v = 2; store.set('opts', opts);
 }
@@ -864,6 +864,7 @@ async function ensureAudioContext() {
     C.player.connect(ac.destination);
   }
   C.player.port.postMessage({ rate: C.rate || 16000 });
+  C.player.port.postMessage({ bufferMs: opts.rxBuffer });
   C.player.port.onmessage = e => {
     if (e.data.sq) {
       const q = e.data.sq;
@@ -873,7 +874,8 @@ async function ensureAudioContext() {
     }
     const s = e.data.stat; if (!s) return;
     $('#audioStat').textContent = I18n.t`Приём: ${C.rate / 1000} кГц, звуковая карта ${ac.sampleRate / 1000} кГц, буфер ${s.ms} мс, ` +
-      I18n.t`пропусков ${s.under}, подстройка ${((s.adj - 1) * 100).toFixed(2)} %`;
+      I18n.t`пропусков ${s.under}, подстройка ${((s.adj - 1) * 100).toFixed(2)} %` +
+      I18n.t` (целевой буфер: ${s.target} мс)`;
   };
   C.player.port.postMessage({ gain: C.gain });
   pushGate();
@@ -1205,6 +1207,11 @@ function initOpts() {
     C.player && C.player.port.postMessage({ rate: C.rate });
     if (C.micNode) { C.micRate = C.rate; C.micNode.port.postMessage({ rate: C.rate }); }
     send({ t: 'audio', on: C.audioOn, rate: C.rate });
+  };
+  $('#optRxBuffer').value = String(opts.rxBuffer);
+  $('#optRxBuffer').onchange = e => {
+    opts.rxBuffer = +e.target.value; saveOpts();
+    C.player && C.player.port.postMessage({ bufferMs: opts.rxBuffer });
   };
   $('#optMic').onchange = e => { opts.micId = e.target.value; saveOpts(); resetMic(); };
   $('#micTest').onclick = async () => {
