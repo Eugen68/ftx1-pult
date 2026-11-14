@@ -65,6 +65,7 @@ jobs:
             dist/lifecycle.txt
             selftest.txt
             LANGUAGES.md
+            README.md
       - name: Релиз «последняя сборка»
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
