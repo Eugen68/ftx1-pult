@@ -1,7 +1,7 @@
 // Сервис-воркер: нужен, чтобы пульт ставился на Android как приложение.
 // Только статика пульта: свежая из сети, из кэша — лишь когда сервер недоступен.
 // Всё остальное (WebSocket, записи, панель, API) идёт мимо него.
-const CACHE = 'ftx1-v34-background-audio';
+const CACHE = 'ftx1-v35-resume';
 const FILES = ['./', 'index.html', 'app.css', 'app.js', 'mem.js', 'worklets.js', 'i18n.js', 'locales/en.json', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
