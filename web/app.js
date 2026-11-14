@@ -792,7 +792,7 @@ $('#sqRadio').oninput = e => {
 
 // ------------------------------------------------------------------ звук приёма
 async function ensureAudioContext() {
-  if (C.ac) { if (C.ac.state === 'suspended') await C.ac.resume(); return C.ac; }
+  if (C.ac) { if (C.ac.state === 'suspended' || C.ac.state === 'interrupted') await C.ac.resume(); return C.ac; }
   const AC = window.AudioContext || window.webkitAudioContext;
   let ac;
   try { ac = new AC({ latencyHint: 'interactive', sampleRate: 48000 }); }   // 48 кГц — как у трансивера
@@ -800,7 +800,19 @@ async function ensureAudioContext() {
   await ac.audioWorklet.addModule('worklets.js');
   C.ac = ac;
   C.player = new AudioWorkletNode(ac, 'rx-player', { outputChannelCount: [2] });
-  C.player.connect(ac.destination);
+  // A real media element lets mobile browsers treat RX as background playback.
+  // Keep the worklet as the only signal path: never play both destinations.
+  if (typeof ac.createMediaStreamDestination === 'function') {
+    C.rxDestination = ac.createMediaStreamDestination();
+    C.rxAudio = document.createElement('audio');
+    C.rxAudio.setAttribute('playsinline', '');
+    C.rxAudio.hidden = true;
+    C.rxAudio.srcObject = C.rxDestination.stream;
+    document.body.appendChild(C.rxAudio);
+    C.player.connect(C.rxDestination);
+  } else {
+    C.player.connect(ac.destination);
+  }
   C.player.port.postMessage({ rate: C.rate || 16000 });
   C.player.port.onmessage = e => {
     if (e.data.sq) {
@@ -815,19 +827,62 @@ async function ensureAudioContext() {
   };
   C.player.port.postMessage({ gain: C.gain });
   pushGate();
+  if (ac.state === 'suspended' || ac.state === 'interrupted') await ac.resume();
   return ac;
 }
-$('#btnAudio').onclick = async () => {
+function updateReceiveAudio(on) {
+  C.audioOn = on;
+  C.player && C.player.port.postMessage({ reset: true });
+  send({ t: 'audio', on, rate: C.rate });
+  $('#btnAudio').textContent = on ? I18n.t('🔊 Звук') : I18n.t('🔇 Звук');
+  $('#btnAudio').classList.toggle('on', on);
+  store.set('audioOn', on);
+  if (navigator.mediaSession) {
+    try { navigator.mediaSession.playbackState = on ? 'playing' : 'paused'; } catch {}
+  }
+}
+async function setReceiveAudio(on) {
+  // Serialize user/lock-screen controls without allowing an old play() to undo Stop.
+  const request = C.rxRequest = (C.rxRequest || 0) + 1;
+  if (!on) {
+    if (C.rxAudio) C.rxAudio.pause();
+    updateReceiveAudio(false);
+    return;
+  }
   try {
     await ensureAudioContext();
-  } catch (e) { toast(I18n.t('Звук недоступен: ') + e.message); return; }
-  C.audioOn = !C.audioOn;
-  C.player.port.postMessage({ reset: true });
-  send({ t: 'audio', on: C.audioOn, rate: C.rate });
-  $('#btnAudio').textContent = C.audioOn ? I18n.t('🔊 Звук') : I18n.t('🔇 Звук');
-  $('#btnAudio').classList.toggle('on', !!C.audioOn);
-  store.set('audioOn', C.audioOn);
-};
+    if (request !== C.rxRequest) return;
+    if (C.rxAudio) await C.rxAudio.play();
+    if (request !== C.rxRequest) {
+      if (!C.audioOn && C.rxAudio) C.rxAudio.pause();
+      return;
+    }
+    updateReceiveAudio(true);
+    if (navigator.mediaSession && window.MediaMetadata) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: 'FTX-1', artist: I18n.t('Приём'),
+          artwork: [{ src: new URL('icon-512.png', location.href).href, sizes: '512x512', type: 'image/png' }],
+        });
+      } catch {}
+    }
+  } catch (e) {
+    if (request !== C.rxRequest) return;
+    if (C.rxAudio) C.rxAudio.pause();
+    updateReceiveAudio(false);
+    toast(I18n.t('Звук недоступен: ') + e.message);
+  }
+}
+$('#btnAudio').onclick = () => setReceiveAudio(!C.audioOn);
+if (navigator.mediaSession) {
+  for (const [action, on] of [['play', true], ['pause', false], ['stop', false]]) {
+    try { navigator.mediaSession.setActionHandler(action, () => setReceiveAudio(on)); } catch {}
+  }
+}
+// Recover interrupted contexts when returning to the app; never enable RX by itself.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && C.audioOn) setReceiveAudio(true);
+});
 $('#volume').value = C.gain * 100;
 $('#volume').oninput = e => { C.gain = e.target.value / 100; store.set('vol', +e.target.value); C.player && C.player.port.postMessage({ gain: C.gain }); };
 
