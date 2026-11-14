@@ -94,21 +94,62 @@ function remapVfo() {                     // MAIN/SUB переключили —
 }
 function act(a, arg) { send({ t: 'act', a, arg }); }
 
+function retryConnection() {
+  if (C.shuttingDown) return;
+  const old = C.ws;
+  C.ws = null; // Ignore late events from the abandoned socket.
+  if (old) { try { old.close(); } catch {} }
+  pttUp();
+  C.txOwner = false;
+  C.txStart = 0;
+  updatePtt();
+  connect();
+}
+function checkConnection(probe = false) {
+  if (C.shuttingDown) return;
+  const ws = C.ws, now = Date.now();
+  if (!ws || ws.readyState > 1 || now - C.lastMessage > 20000) {
+    retryConnection();
+    return;
+  }
+  if (probe && ws.readyState === 1) {
+    clearTimeout(C.probeTimer);
+    const stamp = C.probeStamp = now;
+    send({ t: 'ping', ts: stamp });
+    C.probeTimer = setTimeout(() => {
+      if (C.ws === ws && C.probeStamp === stamp) retryConnection();
+    }, 4000);
+  }
+}
 function connect() {
+  if (C.shuttingDown) return;
+  clearTimeout(C.reconnectTimer);
+  clearTimeout(C.probeTimer);
+  C.probeStamp = null;
+  C.authed = false;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}/ws`);
   ws.binaryType = 'arraybuffer';
   C.ws = ws;
-  ws.onopen = () => send({ t: 'hello', pw: C.pw, rate: C.rate || 16000 });
+  C.lastMessage = Date.now();
+  ws.onopen = () => { if (C.ws === ws) send({ t: 'hello', pw: C.pw, rate: C.rate || 16000 }); };
   ws.onclose = () => {
+    if (C.ws !== ws) return;
+    clearTimeout(C.probeTimer);
+    pttUp();
     C.authed = false; setLink(false, C.shuttingDown ? I18n.t('Сервер остановлен — после запуска обновите страницу') : I18n.t('нет связи с сервером'));
     if (C.txOwner) { C.txOwner = false; updatePtt(); }
-    if (!C.shuttingDown) setTimeout(connect, 2000);
+    if (!C.shuttingDown) C.reconnectTimer = setTimeout(retryConnection, 2000);
   };
   ws.onmessage = (e) => {
+    if (C.ws !== ws) return;
+    C.lastMessage = Date.now();
     if (typeof e.data !== 'string') return onBinary(new Uint8Array(e.data));
     const m = JSON.parse(e.data);
     switch (m.t) {
+      case 'pong':
+        if (m.ts === C.probeStamp) { clearTimeout(C.probeTimer); C.probeStamp = null; }
+        break;
       case 'server_stopping':
         C.shuttingDown = true;
         C.ws.close();
@@ -164,6 +205,15 @@ function connect() {
     }
   };
 }
+
+setInterval(() => {
+  if (C.probeStamp == null) checkConnection(true);
+}, 5000);
+window.addEventListener('online', () => checkConnection(true));
+window.addEventListener('pageshow', () => checkConnection(true));
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) checkConnection(true);
+});
 
 function onBinary(b) {
   const type = b[0];
