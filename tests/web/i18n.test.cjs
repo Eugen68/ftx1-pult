@@ -9,7 +9,7 @@ const catalogue = JSON.parse(fs.readFileSync(path.join(web, 'locales/en.json'), 
 class LocalResources extends ResourceLoader {
   fetch(url) { return Promise.resolve(fs.readFileSync(path.join(web, new URL(url).pathname))); }
 }
-async function open(file, language, blockedStorage = false, offline = false) {
+async function open(file, language, blockedStorage = false, offline = false, setup = () => {}) {
   const errors = [], sent = [], sockets = [];
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
@@ -35,6 +35,7 @@ async function open(file, language, blockedStorage = false, offline = false) {
         close() { this.readyState = 3; }
       };
       w.matchMedia = () => ({ matches: false, addEventListener() {} });
+      setup(w);
     },
   });
   // Wait for the real bootstrap to finish loading all application scripts.
@@ -136,5 +137,92 @@ test('shutdown from tray stops panel reconnect attempts', async () => {
     message({ t: 'server_stopping' });
     assert.equal(dom.window.eval('quitting'), true);
     assert.equal(dom.window.document.querySelector('#gone').classList.contains('hidden'), false);
+  } finally { dom.window.close(); }
+});
+
+function mockAudio(w, { rejectPlay = false, stream = true } = {}) {
+  const connections = [], packets = [], actions = {};
+  let plays = 0, pauses = 0;
+  w.AudioContext = class {
+    constructor() {
+      this.state = 'running'; this.sampleRate = 48000; this.destination = { speaker: true };
+      this.audioWorklet = { addModule: async () => {} };
+      if (stream) this.createMediaStreamDestination = () => ({ stream: { receiver: true } });
+    }
+    async resume() { this.state = 'running'; }
+  };
+  w.AudioWorkletNode = class {
+    constructor() { this.port = { postMessage: m => packets.push(m) }; }
+    connect(node) { connections.push(node); }
+  };
+  w.HTMLMediaElement.prototype.play = async function () {
+    plays++;
+    if (rejectPlay) throw Error('Playback blocked');
+  };
+  w.HTMLMediaElement.prototype.pause = function () { pauses++; };
+  Object.defineProperty(w.navigator, 'mediaSession', { value: {
+    setActionHandler: (name, handler) => actions[name] = handler,
+  } });
+  return { connections, packets, actions, get plays() { return plays; }, get pauses() { return pauses; } };
+}
+for (const stream of [true, false]) test(`RX media controls and safe screen locking (stream=${stream})`, async () => {
+  let audio;
+  const { dom, sent } = await open('index.html', 'en', false, false, w => { audio = mockAudio(w, { stream }); });
+  try {
+    const w = dom.window;
+    await w.eval('setReceiveAudio(true)');
+    assert.equal(w.eval('C.audioOn'), true);
+    assert.equal(audio.connections.length, 1, 'exactly one output path');
+    assert.equal(!!audio.connections[0].stream, stream);
+    assert.equal(audio.plays, stream ? 1 : 0);
+    w.eval('C.pttPressed = true');
+    Object.defineProperty(w.document, 'hidden', { configurable: true, value: true });
+    w.document.dispatchEvent(new w.Event('visibilitychange'));
+    assert.equal(w.eval('C.audioOn'), true, 'screen locking must not disable reception');
+    assert.equal(w.eval('C.pttPressed'), false);
+    assert.ok(sent.some(m => m.t === 'ptt' && m.on === false), 'locking releases PTT');
+    await audio.actions.pause();
+    assert.equal(w.eval('C.audioOn'), false);
+    assert.equal(sent.at(-1).on, false);
+    await audio.actions.play();
+    assert.equal(w.eval('C.audioOn'), true);
+    await audio.actions.stop();
+    assert.equal(w.eval('C.audioOn'), false);
+  } finally { dom.window.close(); }
+});
+test('blocked playback leaves RX off; Stop wins over an unfinished start', async () => {
+  const { dom, sent } = await open('index.html', 'en', false, false, w => mockAudio(w, { rejectPlay: true }));
+  try {
+    await dom.window.eval('setReceiveAudio(true)');
+    assert.equal(dom.window.eval('C.audioOn'), false);
+    assert.equal(sent.at(-1).on, false);
+    await dom.window.eval('Promise.all([setReceiveAudio(true), setReceiveAudio(false)])');
+    assert.equal(dom.window.eval('C.audioOn'), false);
+  } finally { dom.window.close(); }
+});
+
+test('Stop cancels a pending media play and foreground recovery keeps RX opt-in', async () => {
+  const { dom } = await open('index.html', 'en', false, false, w => mockAudio(w));
+  try {
+    const w = dom.window;
+    await w.eval('ensureAudioContext()');
+    let release;
+    w.HTMLMediaElement.prototype.play = () => new Promise(resolve => { release = resolve; });
+    const starting = w.eval('setReceiveAudio(true)');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(typeof release, 'function');
+    await w.eval('setReceiveAudio(false)');
+    release(); await starting;
+    assert.equal(w.eval('C.audioOn'), false);
+    Object.defineProperty(w.document, 'hidden', { configurable: true, value: false });
+    w.document.dispatchEvent(new w.Event('visibilitychange'));
+    assert.equal(w.eval('C.audioOn'), false);
+    w.HTMLMediaElement.prototype.play = async () => {};
+    await w.eval('setReceiveAudio(true)');
+    w.eval("C.ac.state = 'interrupted'");
+    w.document.dispatchEvent(new w.Event('visibilitychange'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(w.eval('C.ac.state'), 'running');
+    assert.equal(w.eval('C.audioOn'), true);
   } finally { dom.window.close(); }
 });
