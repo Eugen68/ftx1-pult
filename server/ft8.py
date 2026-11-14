@@ -10,6 +10,8 @@ FT8 / FT4 в пульте: приём по слотам времени, авто
   * лог: файл ADIF и рассылка по UDP в формате WSJT-X (QSO Logged + Logged ADIF) — его понимают
     HAMLOG-агент, Log4OM, JTAlert, GridTracker и т. п.
 """
+
+from i18n import tr
 import asyncio
 import datetime as dt
 import logging
@@ -167,6 +169,7 @@ class Ft8Desk:
         self.tries = 0
         self.busy = False                       # идёт передача
         self.task = None
+        self.tx_task = None
         self.decodes = []                       # последние декоды (для нового подключения)
         self.qsos = []                          # лог текущего сеанса
         self.last_slot = None
@@ -193,7 +196,7 @@ class Ft8Desk:
         p = dxcc.find_cty(self.base, res_dir)
         self.res_dir = res_dir
         if not p:
-            log.warning("cty.dat не найден — страны не определяются")
+            log.warning(tr("cty.dat не найден — страны не определяются"))
             return
         try:
             self.cty.load(p)
@@ -233,7 +236,7 @@ class Ft8Desk:
                 'tx_par': self.tx_par, 'busy': self.busy, 'auto_cq': self.auto_cq, 'auto_seq': self.auto_seq,
                 'tune': self.tune is not None, 'wide': self.cfg.get('ft_wide', True),
                 'qso': {k: q[k] for k in ('call', 'grid', 'step', 'rst_sent', 'rst_rcvd')} if q else None,
-                'bands': BANDS[self.mode], 'my_call': self.my_call(), 'my_grid': self.my_grid(),
+                'bands': [(tr(label), freq) for label, freq in BANDS[self.mode]], 'my_call': self.my_call(), 'my_grid': self.my_grid(),
                 'udp_host': self.cfg.get('ft_udp_host', '127.0.0.1'), 'udp_port': self.cfg.get('ft_udp_port', 2237),
                 'udp_on': self.cfg.get('ft_udp_on', True), 'pwr': self.cfg.get('ft_pwr', ''),
                 'lib': _ftx is not None, 'lib_err': '' if _ftx else _ftx_err, 'now': time.time(),
@@ -249,7 +252,7 @@ class Ft8Desk:
             self.buf = np.zeros(0, np.float32)
         self.enabled = on
         if on and not self.task and _ftx:
-            self.task = asyncio.create_task(self._loop())
+            self.task = self.st.spawn(self._loop())
         if _ftx and self.my_call():
             _ftx.remember(self.my_call())
 
@@ -290,14 +293,14 @@ class Ft8Desk:
                 # 1) декодирование прошлого слота
                 if t_in >= m['decode_at'] and self.last_slot != k:
                     self.last_slot = k
-                    asyncio.create_task(self._decode_slot(k * m['slot'], k))
+                    self.st.spawn(self._decode_slot(k * m['slot'], k))
                 # 2) передача в своём слоте: в начале слота или с опозданием (ответ декодировался поздно)
                 for kk in (k, k + 1):
                     t_s = kk * m['slot']
                     if self.tx_enable and self.tx_msg and not self.busy and (kk % 2) == self.tx_par \
                             and self.tx_slot != kk and -0.3 < now - t_s < m['late']:
                         self.tx_slot = kk
-                        asyncio.create_task(self._transmit(t_s, self.tx_msg))
+                        self.tx_task = self.st.spawn(self._transmit(t_s, self.tx_msg))
                 # 3) полоса DATA-U: по умолчанию у трансивера 500 Гц — для FT8 нужна 3000 Гц
                 self._check_width(now)
                 # 4) PSK Reporter: пачка принятых раз в ~5 мин; «где меня слышат» — пока передаём
@@ -334,8 +337,8 @@ class Ft8Desk:
         w = self.W_DATA[max(0, min(23, int(s['width'])))]
         if w < 2400:
             rig.set_param('width', 18)
-            log.info("FT8: полоса DATA-U %d Гц -> 3000 Гц", w)
-            self.bc({'t': 'ft_note', 'msg': 'Полоса приёма DATA-U была %d Гц — расширил до 3000 Гц для FT8' % w})
+            log.info(tr("FT8: полоса DATA-U %d Гц -> 3000 Гц"), w)
+            self.bc({'t': 'ft_note', 'msg': tr('Полоса приёма DATA-U была %d Гц — расширил до 3000 Гц для FT8') % w})
 
     async def _decode_slot(self, t0, k):
         m = MODES[self.mode]
@@ -345,7 +348,7 @@ class Ft8Desk:
         try:
             res = await asyncio.to_thread(_ftx.decode, x.astype(np.float32).tobytes(), m['ft4'], 200.0, 3000.0)
         except Exception:
-            log.exception("FT8: декодирование")
+            log.exception(tr("FT8: декодирование"))
             return
         slot = time.strftime('%H%M%S', time.gmtime(t0))
         mc = self.my_call()
@@ -418,7 +421,7 @@ class Ft8Desk:
     def start_cq(self):
         mc, g = self.my_call(), self.my_grid()
         if not mc:
-            return 'Укажите свой позывной'
+            return tr('Укажите свой позывной')
         self.qso = None
         self._set_tx(self._msg('CQ', mc, g))
         self.tx_enable = True
@@ -428,11 +431,11 @@ class Ft8Desk:
         """Ответ на CQ или вызов станции из списка декодов."""
         mc, g = self.my_call(), self.my_grid()
         if not mc:
-            return 'Укажите свой позывной'
+            return tr('Укажите свой позывной')
         w = item['text'].split()
         dx = self._dx_of(w)
         if not dx or dx == mc:
-            return 'В сообщении нет позывного'
+            return tr('В сообщении нет позывного')
         grid = next((x for x in w[1:] if re.fullmatch(GRID_RE, x) and x != 'RR73'), '')
         self.qso = {'call': dx, 'grid': grid, 'step': 'call', 'snr': item['snr'], 'rst_sent': '', 'rst_rcvd': '',
                     'on': dt.datetime.now(dt.timezone.utc).replace(tzinfo=None), 'f': item['f']}
@@ -476,14 +479,14 @@ class Ft8Desk:
                 self._handle_reply(w, i, 1 - i['par'])
                 return
             self._set_tx(self._msg(dx, mc, self.qso['rst_sent']), 1 - i['par'])
-            self.bc({'t': 'ft_note', 'msg': 'Отвечает %s' % dx})
+            self.bc({'t': 'ft_note', 'msg': tr('Отвечает %s') % dx})
             return
         # ответа нет — повторяем или сдаёмся
         if (k % 2) != self.tx_par and self.tx_msg:
             self.tries += 1
             limit = int(self.cfg.get('ft_tries', 6))
             if self.tries > limit and q:
-                self.bc({'t': 'ft_note', 'msg': '%s не ответил — связь прервана' % q['call']})
+                self.bc({'t': 'ft_note', 'msg': tr('%s не ответил — связь прервана') % q['call']})
                 self.qso = None
                 if self.auto_cq:
                     self.start_cq()
@@ -580,12 +583,12 @@ class Ft8Desk:
     def _why_not(self):
         st = self.st
         if not st.rig or not st.running or not st.audio:
-            return 'Связь с трансивером не запущена'
+            return tr('Связь с трансивером не запущена')
         if st.ptt_owner is not None or st.cw.sender.busy or st.digi.tx_busy or st.vk.task:
-            return 'Передатчик занят (голос, CW, RTTY или автовызов)'
+            return tr('Передатчик занят (голос, CW, RTTY или автовызов)')
         mode = st.rig.state.get('mode') or ''
         if mode != 'DATA-U':
-            return 'Для FT8 переключите трансивер в DATA-U (сейчас %s)' % (mode or '?')
+            return tr('Для FT8 переключите трансивер в DATA-U (сейчас %s)') % (mode or '?')
         return ''
 
     async def _transmit(self, t_slot, msg):
@@ -597,7 +600,7 @@ class Ft8Desk:
             return
         tones = _ftx.encode(msg, MODES[self.mode]['ft4'])
         if tones is None:
-            self.bc({'t': 'ft_note', 'msg': 'Сообщение «%s» не кодируется в %s' % (msg, self.mode)})
+            self.bc({'t': 'ft_note', 'msg': tr('Сообщение «%s» не кодируется в %s') % (msg, self.mode)})
             self.tx_enable = False
             return
         x = gfsk(list(tones), self.tx_hz, self.mode, amp=float(self.cfg.get('ft_tx_level', 0.5)))
@@ -628,7 +631,7 @@ class Ft8Desk:
                 i += step
             await asyncio.sleep(0.3)
         except Exception:
-            log.exception("FT8: передача")
+            log.exception(tr("FT8: передача"))
         finally:
             try:
                 st.rig.ptt(False)
@@ -698,7 +701,7 @@ class Ft8Desk:
                 c.ws.send_json({'t': 'ft_dec', 'slot': d['slot'], 'items': d['items'], 'mode': self.mode, 'old': True})
             c.ws.send_json({'t': 'ft_log', 'items': self.qsos[-30:]})
             if not _ftx:
-                c.ws.send_json({'t': 'ft_note', 'msg': 'Модуль FT8 не загрузился: %s' % _ftx_err})
+                c.ws.send_json({'t': 'ft_note', 'msg': tr('Модуль FT8 не загрузился: %s') % _ftx_err})
             return
         if t == 'ft_off':
             c.ft_on = False
@@ -740,13 +743,13 @@ class Ft8Desk:
             if m.get('last'):
                 total, new = await asyncio.to_thread(self.wk.import_recs, self._imp, bool(m.get('replace')))
                 self._imp = []
-                c.ws.send_json({'t': 'ft_note', 'msg': 'Лог загружен: %d связей, новых %d. Сработано стран: %d, позывных: %d'
+                c.ws.send_json({'t': 'ft_note', 'msg': tr('Лог загружен: %d связей, новых %d. Сработано стран: %d, позывных: %d')
                                 % (total, new, self.wk.stats()['dxcc'], self.wk.stats()['calls'])})
             else:
                 return
         elif t == 'ft_import_clear':
             self.wk.clear_import()
-            c.ws.send_json({'t': 'ft_note', 'msg': 'Загруженные логи удалены — остался только лог FT8 пульта'})
+            c.ws.send_json({'t': 'ft_note', 'msg': tr('Загруженные логи удалены — остался только лог FT8 пульта')})
         elif t == 'ft_auto_seq':
             self.auto_seq = bool(m.get('on'))
         elif t == 'ft_dx':
@@ -768,7 +771,7 @@ class Ft8Desk:
                 if why:
                     c.ws.send_json({'t': 'ft_note', 'msg': why})
                 else:
-                    self.tune = asyncio.create_task(self._tune())
+                    self.tune = self.st.spawn(self._tune())
             elif not m.get('on') and self.tune:
                 self.tune.cancel()
         elif t == 'ft_auto_cq':
@@ -805,6 +808,7 @@ class Ft8Desk:
 
     def stop(self):
         self.tx_enable = False
-        if self.tune:
-            self.tune.cancel()
         self.enabled = False
+        for task in (self.task, self.tx_task, self.tune):
+            if task and not task.cancelling():
+                task.cancel()

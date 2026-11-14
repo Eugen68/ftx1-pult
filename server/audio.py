@@ -6,6 +6,8 @@
   TX: 16/8 кГц от клиента -> интерполяция до 48 кГц -> джиттер-буфер ->
       выход на трансивер (модуляция с USB).
 """
+
+from i18n import tr
 import logging
 import threading
 import time
@@ -325,10 +327,10 @@ class SoundDeviceAudio:
                         return
                     except Exception as e:
                         errs.append('%s: %s' % (api, e))
-                        log.warning("Звук через %s не открылся: %s", api, e)
+                        log.warning(tr("Звук через %s не открылся: %s"), api, e)
                         self.stop()
                 if errs:
-                    raise RuntimeError('Звуковая карта трансивера не открылась (%s)' % '; '.join(errs))
+                    raise RuntimeError(tr('Звуковая карта трансивера не открылась (%s)') % '; '.join(errs))
         devs = list_devices()
         gi, go = guess_codec(devs)
         ind = self.in_dev if self.in_dev is not None else find_device(self.in_name, 'in', self.api)
@@ -343,20 +345,20 @@ class SoundDeviceAudio:
         if ind is None or outd is None:
             what = []
             if ind is None:
-                what.append("вход «%s»" % (self.in_name or 'USB Audio CODEC/Device'))
+                what.append(tr("вход «%s»") % (self.in_name or 'USB Audio CODEC/Device'))
             if outd is None:
-                what.append("выход «%s»" % (self.out_name or 'пара к входу'))
+                what.append(tr("выход «%s»") % (self.out_name or tr('пара к входу')))
             for d in devs:
-                log.info("  звук [%d] %s (%s) in=%d out=%d", d['index'], d['name'], d['api'], d['in'], d['out'])
-            raise RuntimeError("Не найден %s. Выберите устройства трансивера в панели управления "
-                               "(список всех устройств — в журнале)." % ' и '.join(what))
+                log.info(tr("  звук [%d] %s (%s) in=%d out=%d"), d['index'], d['name'], d['api'], d['in'], d['out'])
+            raise RuntimeError(tr("Не найден %s. Выберите устройства трансивера в панели управления "
+                               "(список всех устройств — в журнале).") % ' и '.join(what))
         self._open(ind, outd)
 
     def _open(self, ind, outd):
         import sounddevice as sd
         self.names = (sd.query_devices(ind)['name'], sd.query_devices(outd)['name'])
         api = sd.query_hostapis(sd.query_devices(outd)['hostapi'])['name']
-        log.info("Звук: приём с [%s] %s, передача на [%s] %s (%s)", ind, self.names[0], outd, self.names[1], api)
+        log.info(tr("Звук: приём с [%s] %s, передача на [%s] %s (%s)"), ind, self.names[0], outd, self.names[1], api)
 
         self.overflows = self.underflows = 0
         self._last_report = time.monotonic()
@@ -369,7 +371,7 @@ class SoundDeviceAudio:
             self.on_rx(x)
             now = time.monotonic()
             if now - self._last_report > 60 and (self.overflows or self.underflows):
-                log.warning("Звук: потерь при приёме %d, при передаче %d за минуту", self.overflows, self.underflows)
+                log.warning(tr("Звук: потерь при приёме %d, при передаче %d за минуту"), self.overflows, self.underflows)
                 self.overflows = self.underflows = 0
                 self._last_report = now
 
@@ -393,7 +395,7 @@ class SoundDeviceAudio:
             raise
         self.streams = [sin, sout]
         self.tx.clear()
-        log.info("Звук: задержка драйвера приём %.0f мс, передача %.0f мс", sin.latency * 1000, sout.latency * 1000)
+        log.info(tr("Звук: задержка драйвера приём %.0f мс, передача %.0f мс"), sin.latency * 1000, sout.latency * 1000)
 
     def stop(self):
         for s in self.streams:

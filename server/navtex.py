@@ -9,6 +9,8 @@ B1 — станция, B2 — тема, B3B4 — номер.
 Приём в USB: трансивер ставится на 1,7 кГц ниже частоты станции (518 кГц -> 516,3 кГц USB),
 сигнал оказывается около 1700 Гц звука.
 """
+from i18n import tr
+
 import re
 import time
 
@@ -247,7 +249,7 @@ class NavtexDecoder:
             b1, b2, num = m.groups()
             self.msg = {'id': m.group(0)}
             self.on_event({'t': 'nx_msg', 'b1': b1, 'b2': b2, 'num': num,
-                           'station': STATIONS_518.get(b1, ''), 'subject': SUBJECTS.get(b2, ''),
+                           'station': tr(STATIONS_518.get(b1, '')), 'subject': tr(SUBJECTS.get(b2, '')),
                            'time': time.strftime('%H:%M')})
         if 'NNNN' in self.line[-12:] and self.msg:
             self.on_event({'t': 'nx_end'})

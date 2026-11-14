@@ -11,6 +11,8 @@ WEFAX: 48 кГц -> 12 кГц -> ЧМ-демодулятор вокруг 1900 �
   строки 120 строк/мин, ширина 1809 точек (IOC 576). Автостарт по тону старта (300 Гц),
   фазирование по импульсу в начале строки (+ авто-коррекция наклона), стоп по тону 450 Гц.
 """
+
+from i18n import tr
 import logging
 import threading
 import time
@@ -298,7 +300,7 @@ class RttyDecoder:
             mk_, sp_ = self.lvl
             sig = 20 * np.log10((mk_ + sp_ + 1e-9) / (abs(mk_ - sp_) * 0 + np.percentile(np.abs(d), 10) + 1e-3))
             self.on_event({'t': 'rt_info', 'fc': round(self.fc), 'shift': self.shift, 'baud': self.baud,
-                           'pol': 'прямая' if self.best == 0 else 'обратная',
+                           'pol': tr('прямая') if self.best == 0 else tr('обратная'),
                            'err': round(self.u[self.best].score() * 100), 'mark': self.lvl[0], 'space': self.lvl[1]})
 
 
@@ -367,7 +369,7 @@ class FaxDecoder:
             self.reset()
             if not self.enabled and st == 'image' and rows:
                 self.rows = rows
-                self.finish('приём остановлен')
+                self.finish(tr('приём остановлен'))
 
     def spl(self):
         return self.FS * 60.0 / self.lpm * (1 + self.slant * 1e-6)
@@ -378,7 +380,7 @@ class FaxDecoder:
             self.rows, self.phase_px = [], []
             self._set_state('image')
 
-    def finish(self, why='стоп'):
+    def finish(self, why=tr('стоп')):
         rows = self.rows
         self.rows = []
         if self.state != 'idle':
@@ -485,7 +487,7 @@ class FaxDecoder:
             c, d = (lo + hi) / 2, (hi - lo) / 2
             if abs(c - self.center) > 25 or abs(d - self.dev) > 25:
                 self.center, self.dev = float(c), float(d)
-                self.on_event({'t': 'fax_note', 'msg': 'АПЧ (%s): чёрный %d Гц, белый %d Гц' % (what, lo, hi)})
+                self.on_event({'t': 'fax_note', 'msg': tr('АПЧ (%s): чёрный %d Гц, белый %d Гц') % (what, lo, hi)})
 
     def _tones(self, v):
         """Тоны старта/стопа: яркость меняется с частотой 300 / 675 Гц (старт) или 450 Гц (стоп)."""
@@ -512,15 +514,15 @@ class FaxDecoder:
             t = last[0]
             if t in (300, 675) and self.auto and self.state != 'phasing':
                 if self.state == 'image':
-                    self.finish('новая карта')
+                    self.finish(tr('новая карта'))
                 self.ioc = 576 if t == 300 else 288
-                self._afc('тон старта')
+                self._afc(tr('тон старта'))
                 self.rows, self.phase_px = [], []
                 self.val, self.pos = np.zeros(0, np.float32), 0.0
                 self._set_state('phasing')
-                self.on_event({'t': 'fax_note', 'msg': 'Тон старта (IOC %d) — фазирование' % self.ioc})
+                self.on_event({'t': 'fax_note', 'msg': tr('Тон старта (IOC %d) — фазирование') % self.ioc})
             elif t == 450 and self.state == 'image' and self.auto:
-                self.finish('тон стопа')
+                self.finish(tr('тон стопа'))
             self.tone_hist = []
 
     def _line(self, row):
@@ -542,7 +544,7 @@ class FaxDecoder:
             if ok:
                 self.bad_phase = 0
                 if len(self.phase_px) == 6:
-                    self._afc('фазирование')
+                    self._afc(tr('фазирование'))
                 if len(self.phase_px) >= 40:
                     self._end_phasing()
             else:
@@ -556,7 +558,7 @@ class FaxDecoder:
             self.rows.append(g)
             self.on_row(len(self.rows) - 1, g)
             if len(self.rows) >= 3000:
-                self.finish('предел 3000 строк')
+                self.finish(tr('предел 3000 строк'))
 
     def _end_phasing(self):
         p = np.unwrap(np.array(self.phase_px) / self.W * 2 * np.pi) / (2 * np.pi) * self.W if self.phase_px else []
@@ -578,7 +580,7 @@ class FaxDecoder:
             self.pos += ((cur - target) % self.W) / self.W * self.spl()
         self.rows = []
         self._set_state('image')
-        self.on_event({'t': 'fax_note', 'msg': 'Фазирование: %d строк, наклон %+d ppm' % (len(self.phase_px), round(self.slant))})
+        self.on_event({'t': 'fax_note', 'msg': tr('Фазирование: %d строк, наклон %+d ppm') % (len(self.phase_px), round(self.slant))})
 
 
 def fax_synth(img, lpm=120, ioc=576, fs=SR, start=True, phasing=20, stop=True, dev=400, center=1900, amp=0.3):

@@ -18,6 +18,8 @@
 
 Группы — свои, в файле редактора (в трансивере группы каналов по CAT не задаются).
 """
+
+from i18n import tr
 import asyncio
 import csv
 import io
@@ -131,9 +133,9 @@ class MemoryDesk:
     def busy_reason(self):
         st = self.st
         if not st.rig or not st.running:
-            return 'Связь с трансивером не запущена'
+            return tr('Связь с трансивером не запущена')
         if st.rig.state.get('tx') or st.ptt_owner is not None or st.ft.busy or st.digi.tx_busy or st.cw.sender.busy:
-            return 'Идёт передача — дождитесь окончания'
+            return tr('Идёт передача — дождитесь окончания')
         return ''
 
     # ------------------------------------------------------------------ чтение
@@ -215,10 +217,10 @@ class MemoryDesk:
                 if ch['ch'] in PMS:
                     ch['pms'] = PMS[ch['ch']]
             c.ws.send_json({'t': 'mem_data', 'chans': chans, 'partial': self.stop_flag,
-                            'msg': 'Прочитано каналов: %d, занято: %d' % (len(chans), sum(not x['empty'] for x in chans))})
+                            'msg': tr('Прочитано каналов: %d, занято: %d') % (len(chans), sum(not x['empty'] for x in chans))})
         except Exception as e:
-            log.exception("Память: чтение")
-            c.ws.send_json({'t': 'mem_err', 'msg': 'Ошибка чтения: %s' % e})
+            log.exception(tr("Память: чтение"))
+            c.ws.send_json({'t': 'mem_err', 'msg': tr('Ошибка чтения: %s') % e})
         finally:
             self.task = None
 
@@ -241,7 +243,7 @@ class MemoryDesk:
         if was_empty:
             await self.rig.exec_seq([self._mw(c), '~150'])
             if not parse_mr((await self.rig.exec_seq(['MR%05d' % ch]))[0]):
-                raise RuntimeError('трансивер не создал канал %d — запись остановлена' % ch)
+                raise RuntimeError(tr('трансивер не создал канал %d — запись остановлена') % ch)
         need_am = fm and (c['tone_mode'] in (1, 2, 3))
         if need_am:
             # 2) номер тона / DCS: через VFO-A и AM (MW их не задаёт)
@@ -251,7 +253,7 @@ class MemoryDesk:
             m = re.match(r'^MC0(\d{5})$', r[2] or '')
             if not m or int(m.group(1)) != ch:
                 await self._restore_pos(saved_vm, saved_mc)
-                raise RuntimeError('трансивер не встал на канал %d (ответ «%s») — запись остановлена' % (ch, r[2]))
+                raise RuntimeError(tr('трансивер не встал на канал %d (ответ «%s») — запись остановлена') % (ch, r[2]))
             await self.rig.exec_seq(['VM000', '~150'])
             va = await self.rig.exec_seq(['FA', 'MD0', 'CT0', 'CN00', 'CN01', 'OS0'])
             try:
@@ -274,18 +276,18 @@ class MemoryDesk:
         got = await self.read_channel(ch)
         problems = []
         if got['empty']:
-            problems.append('трансивер не принял канал')
+            problems.append(tr('трансивер не принял канал'))
         else:
             if got['freq'] != c['freq']:
-                problems.append('частота %s' % got['freq'])
+                problems.append(tr('частота %s') % got['freq'])
             if got['mode'] != c['mode']:
-                problems.append('вид %s' % got['mode'])
+                problems.append(tr('вид %s') % got['mode'])
             if got['name'].rstrip() != c['name'].rstrip():
-                problems.append('имя «%s»' % got['name'])
+                problems.append(tr('имя «%s»') % got['name'])
             if fm and got['shift'] != c['shift']:
-                problems.append('сдвиг')
+                problems.append(tr('сдвиг'))
             if got['split'] != c['split'] or (c['split'] and got['tx_freq'] != c['tx_freq']):
-                problems.append('частота передачи')
+                problems.append(tr('частота передачи'))
         return not problems, problems, got
 
     async def _write_all(self, c, chans):
@@ -300,10 +302,10 @@ class MemoryDesk:
                     c.ws.send_json({'t': 'mem_err', 'msg': why})
                     break
                 if ch['empty']:
-                    results.append({'ch': ch['ch'], 'ok': False, 'msg': 'очистить канал по CAT нельзя — только с трансивера'})
+                    results.append({'ch': ch['ch'], 'ok': False, 'msg': tr('очистить канал по CAT нельзя — только с трансивера')})
                     continue
                 if not 30_000 <= ch['freq'] <= 470_000_000:
-                    results.append({'ch': ch['ch'], 'ok': False, 'msg': 'частота вне диапазона трансивера'})
+                    results.append({'ch': ch['ch'], 'ok': False, 'msg': tr('частота вне диапазона трансивера')})
                     continue
                 try:
                     ok, problems, got = await self.write_channel(ch)
@@ -315,17 +317,17 @@ class MemoryDesk:
                 c.ws.send_json({'t': 'mem_progress', 'what': 'write', 'i': i + 1, 'n': n, 'ch': ch['ch']})
             good = sum(r['ok'] for r in results)
             c.ws.send_json({'t': 'mem_written', 'results': results,
-                            'msg': 'Записано каналов: %d из %d' % (good, len(chans))})
+                            'msg': tr('Записано каналов: %d из %d') % (good, len(chans))})
         except Exception as e:
-            log.exception("Память: запись")
-            c.ws.send_json({'t': 'mem_err', 'msg': 'Ошибка записи: %s' % e})
+            log.exception(tr("Память: запись"))
+            c.ws.send_json({'t': 'mem_err', 'msg': tr('Ошибка записи: %s') % e})
         finally:
             self.task = None
             self.rig.refresh(0.3)
 
     # ------------------------------------------------------------------ файлы
     def _path(self, name):
-        name = re.sub(r'[\\/:*?"<>|]', '_', str(name or '').strip())[:60] or 'Без названия'
+        name = re.sub(r'[\\/:*?"<>|]', '_', str(name or '').strip())[:60] or tr('Без названия')
         return os.path.join(self.dir, name + '.json'), name
 
     def list_files(self):
@@ -403,7 +405,7 @@ class MemoryDesk:
                             'pms': PMS, 'busy': self.task is not None})
         elif t == 'mem_read':
             if self.task:
-                return c.ws.send_json({'t': 'mem_err', 'msg': 'Уже идёт чтение или запись'})
+                return c.ws.send_json({'t': 'mem_err', 'msg': tr('Уже идёт чтение или запись')})
             why = self.busy_reason()
             if why:
                 return c.ws.send_json({'t': 'mem_err', 'msg': why})
@@ -411,17 +413,17 @@ class MemoryDesk:
             b = max(a, min(CH_MAX, int(m.get('to', CH_MAX))))
             rng = list(range(a, b + 1)) + (list(PMS) if m.get('pms') else [])
             self.stop_flag = False
-            self.task = asyncio.create_task(self._read_all(c, rng, bool(m.get('tones', True))))
+            self.task = self.st.spawn(self._read_all(c, rng, bool(m.get('tones', True))))
         elif t == 'mem_write':
             if self.task:
-                return c.ws.send_json({'t': 'mem_err', 'msg': 'Уже идёт чтение или запись'})
+                return c.ws.send_json({'t': 'mem_err', 'msg': tr('Уже идёт чтение или запись')})
             why = self.busy_reason()
             if why:
                 return c.ws.send_json({'t': 'mem_err', 'msg': why})
             chans = [clean(x) for x in (m.get('chans') or [])]
             chans = [x for x in chans if CH_MIN <= x['ch'] <= CH_MAX or x['ch'] in PMS]
             self.stop_flag = False
-            self.task = asyncio.create_task(self._write_all(c, chans))
+            self.task = self.st.spawn(self._write_all(c, chans))
         elif t == 'mem_stop':
             self.stop_flag = True
         elif t == 'mem_recall':                   # перейти на канал на трансивере
@@ -449,9 +451,9 @@ class MemoryDesk:
                 with open(path, encoding='utf-8') as f:
                     data = json.load(f)
                 c.ws.send_json({'t': 'mem_data', 'chans': [clean(x) for x in data.get('chans', [])],
-                                'groups': data.get('groups', []), 'file': name, 'msg': 'Открыт файл «%s»' % name})
+                                'groups': data.get('groups', []), 'file': name, 'msg': tr('Открыт файл «%s»') % name})
             except (OSError, ValueError) as e:
-                c.ws.send_json({'t': 'mem_err', 'msg': 'Не открылся файл: %s' % e})
+                c.ws.send_json({'t': 'mem_err', 'msg': tr('Не открылся файл: %s') % e})
         elif t == 'mem_delete':
             path, name = self._path(m.get('name'))
             try:
@@ -464,4 +466,4 @@ class MemoryDesk:
         elif t == 'mem_csv_in':
             chans = self.from_csv(str(m.get('text') or ''))
             c.ws.send_json({'t': 'mem_data', 'chans': chans, 'imported': True,
-                            'msg': 'Из CSV взято каналов: %d' % len(chans)})
+                            'msg': tr('Из CSV взято каналов: %d') % len(chans)})

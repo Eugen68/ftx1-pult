@@ -1,7 +1,8 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" class="i18n-loading">
 <head>
 <meta charset="utf-8">
+<style>.i18n-loading body { visibility: hidden; }</style>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FTX-1 Пульт — сервер</title>
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -73,12 +74,15 @@
     <img src="icon.svg" alt="">
     <div><h1>FTX-1 Пульт — сервер</h1><div class="ver" id="ver"></div></div>
     <span class="spacer"></span>
+    <button class="btn quit" id="btnQuitTop">⏻ Выйти</button>
     <span class="saved" id="saved">✓ Сохранено</span>
     <select id="scale" title="Масштаб окна" class="scale-sel">
       <option value="auto">Масштаб: авто</option><option value="0.8">80 %</option><option value="0.9">90 %</option><option value="1">100 %</option>
       <option value="1.1">110 %</option><option value="1.25">125 %</option><option value="1.5">150 %</option><option value="1.75">175 %</option><option value="2">200 %</option>
     </select>
   </div>
+
+  <p class="muted small">Кнопка X закрывает только окно. Чтобы остановить сервер, нажмите «Выйти».</p>
 
   <section class="panel wizard hidden" id="wizard">
     <h3>👋 Первый запуск</h3>
@@ -173,6 +177,9 @@
 
     <section class="panel card">
       <h3>⚙ Запуск</h3>
+      <label>Язык / Language
+          <select id="language" data-language><option value="ru">Русский</option><option value="en">English</option></select></label>
+        <p class="muted small">Язык интерфейса и пояснений ИИ. Переподключает все пульты; меняйте только между передачами.</p>
       <div class="checks">
         <label class="chk" id="autostartRow"><input type="checkbox" id="autostart"> Запускать вместе с Windows (в трее, без окна)</label>
         <label class="chk"><input type="checkbox" id="auto_connect"> Сразу подключаться к трансиверу</label>
@@ -204,7 +211,6 @@
 
 <div id="gone" class="overlay hidden"><div class="dialog"><h2>Сервер остановлен</h2><p class="muted">Это окно можно закрыть.</p></div></div>
 <div id="toast" class="toast"></div>
-<script src="qrcode.js"></script>
-<script src="panel.js"></script>
+<script src="i18n.js" data-scripts="qrcode.js,panel.js"></script>
 </body>
 </html>

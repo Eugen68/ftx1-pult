@@ -1,7 +1,8 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" class="i18n-loading">
 <head>
 <meta charset="utf-8">
+<style>.i18n-loading body { visibility: hidden; }</style>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#0d1117">
 <meta name="mobile-web-app-capable" content="yes">
@@ -578,8 +579,14 @@
 
     <div class="tab" id="tab-opts">
       <div class="opts">
+        <label>Язык / Language
+          <select id="language" data-language><option value="ru">Русский</option><option value="en">English</option></select></label>
+        <p class="muted small">Язык интерфейса и пояснений ИИ. Переподключает все пульты; меняйте только между передачами.</p>
         <label>Качество звука по сети
           <select id="optRate"><option value="48000">48 кГц — без сжатия (этот ПК, проводная сеть)</option><option value="16000">16 кГц (Wi-Fi, телефон дома)</option><option value="8000">8 кГц (мобильный интернет)</option></select></label>
+        <label>Буфер приёма
+          <select id="optRxBuffer"><option value="120">120 мс — минимальная задержка</option><option value="240">240 мс — сбалансированный</option><option value="400">400 мс — нестабильная сеть</option></select></label>
+        <p class="muted small">При пропусках буфер автоматически увеличивается до 600 мс. Больший буфер повышает устойчивость, но задерживает звук.</p>
         <p class="muted small" id="audioStat"></p>
         <label>Микрофон этого устройства <select id="optMic"><option value="">По умолчанию</option></select></label>
         <div class="row"><button class="btn small" id="micTest" title="Включить микрофон без передачи и проверить уровень">🎙 Проверить микрофон</button>
@@ -702,7 +709,6 @@
     </div>
   </div>
 </div>
-<script src="app.js"></script>
-<script src="mem.js"></script>
+<script src="i18n.js" data-scripts="app.js,mem.js"></script>
 </body>
 </html>

@@ -8,6 +8,8 @@
   * вытаскивает позывной корреспондента, RST, имя, QTH; понимает, зовут ли нас;
   * составляет ответ в принятом в CW формате.
 """
+
+from i18n import tr
 import json
 import logging
 import re
@@ -78,7 +80,7 @@ def _parse_json(s):
     s = _strip_think(s)
     m = re.search(r'\{.*\}', s, re.S)
     if not m:
-        raise AiError("Модель ответила не в формате JSON: " + s[:200])
+        raise AiError(tr("Модель ответила не в формате JSON: ") + s[:200])
     txt = m.group(0)
     try:
         return json.loads(txt)
@@ -87,7 +89,7 @@ def _parse_json(s):
         try:
             return json.loads(re.sub(r',\s*([}\]])', r'\1', txt))
         except json.JSONDecodeError as e:
-            raise AiError("Не удалось разобрать JSON модели: %s" % e)
+            raise AiError(tr("Не удалось разобрать JSON модели: %s") % e)
 
 
 class LmStudio:
@@ -107,12 +109,12 @@ class LmStudio:
                 return json.loads(r.read().decode('utf-8'))
         except urllib.error.HTTPError as e:
             msg = e.read().decode('utf-8', 'replace')[:300]
-            raise AiError("LM Studio ответил ошибкой %d: %s" % (e.code, msg))
+            raise AiError(tr("LM Studio ответил ошибкой %d: %s") % (e.code, msg))
         except urllib.error.URLError as e:
-            raise AiError("LM Studio недоступен по адресу %s (%s). Запустите LM Studio и включите "
-                          "сервер: вкладка Developer → Start Server." % (self.url, e.reason))
+            raise AiError(tr("LM Studio недоступен по адресу %s (%s). Запустите LM Studio и включите "
+                          "сервер: вкладка Developer → Start Server.") % (self.url, e.reason))
         except TimeoutError:
-            raise AiError("LM Studio не ответил за %d с — модель слишком большая или занята" % (timeout or self.timeout))
+            raise AiError(tr("LM Studio не ответил за %d с — модель слишком большая или занята") % (timeout or self.timeout))
 
     def models(self):
         r = self._req('/models', timeout=5)
@@ -123,7 +125,7 @@ class LmStudio:
         if not model:
             ms = self.models()
             if not ms:
-                raise AiError("В LM Studio не загружена ни одна модель")
+                raise AiError(tr("В LM Studio не загружена ни одна модель"))
             model = ms[0]
         body = {'model': model, 'temperature': temperature, 'max_tokens': max_tokens, 'stream': False,
                 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]}
@@ -140,7 +142,7 @@ class LmStudio:
         try:
             content = r['choices'][0]['message']['content']
         except (KeyError, IndexError):
-            raise AiError("Неожиданный ответ LM Studio: %s" % str(r)[:200])
+            raise AiError(tr("Неожиданный ответ LM Studio: %s") % str(r)[:200])
         return _parse_json(content), model
 
 
@@ -164,15 +166,15 @@ REPLY_SCHEMA = {
 def fmt_history(hist, n=8):
     lines = []
     for h in hist[-n:]:
-        who = 'Я' if h['dir'] == 'tx' else 'ОН'
+        who = tr('Я') if h['dir'] == 'tx' else tr('ОН')
         lines.append('%s: %s' % (who, h.get('clean') or h['text']))
-    return '\n'.join(lines) or '(начало связи)'
+    return '\n'.join(lines) or tr('(начало связи)')
 
 
 def analyze(lm, raw, history, op):
     my = (op.get('my_call') or 'MYCALL').upper()
-    sys_p = SYS_ANALYZE.format(my_call=my)
-    user = USER_ANALYZE.format(my_call=my, history=fmt_history(history), raw=raw.strip())
+    sys_p = tr(SYS_ANALYZE).format(my_call=my)
+    user = tr(USER_ANALYZE).format(my_call=my, history=fmt_history(history), raw=raw.strip())
     res, model = lm.chat_json(sys_p, user, ANALYZE_SCHEMA)
     out = {k: res.get(k, '') for k in ANALYZE_SCHEMA['properties']}
     out['calls_me'] = bool(res.get('calls_me'))
@@ -187,15 +189,15 @@ def analyze(lm, raw, history, op):
 
 def reply(lm, history, analysis, op, task=''):
     my = (op.get('my_call') or 'MYCALL').upper()
-    sys_p = SYS_REPLY.format(my_call=my, my_name=op.get('my_name') or '—', my_qth=op.get('my_qth') or '—',
+    sys_p = tr(SYS_REPLY).format(my_call=my, my_name=op.get('my_name') or '—', my_qth=op.get('my_qth') or '—',
                              my_extra=op.get('my_extra') or '—')
     if not task:
-        task = ('Составь мой следующий ответ корреспонденту по ходу связи: если он позвал меня — дай RST, '
+        task = (tr('Составь мой следующий ответ корреспонденту по ходу связи: если он позвал меня — дай RST, '
                 'имя и QTH; если дал свои данные — поблагодари и заверши связь (73 <SK>); если он дал CQ — '
-                'ответь на вызов коротко (его позывной DE мой позывной K).')
-    user = USER_REPLY.format(history=fmt_history(history), task=task,
+                'ответь на вызов коротко (его позывной DE мой позывной K).'))
+    user = tr(USER_REPLY).format(history=fmt_history(history), task=task,
                              analysis=json.dumps({k: analysis.get(k) for k in ('clean', 'call', 'rst', 'name', 'qth', 'kind')},
-                                                 ensure_ascii=False) if analysis else '(нет)')
+                                                 ensure_ascii=False) if analysis else tr('(нет)'))
     res, model = lm.chat_json(sys_p, user, REPLY_SCHEMA, temperature=0.3, max_tokens=400)
     return {'text': str(res.get('text', '')), 'ru': str(res.get('ru', '')), 'model': model}
 
@@ -285,32 +287,32 @@ def analyze_rules(raw, history, op):
     # смысл по-русски
     parts = []
     if kind == 'cq':
-        parts.append('%s даёт общий вызов (CQ).' % (call or 'Станция'))
+        parts.append(tr('%s даёт общий вызов (CQ).') % (call or tr('Станция')))
     elif to and call:
-        parts.append('%s вызывает %s.' % (call, 'вас' if me else to))
+        parts.append(tr('%s вызывает %s.') % (call, tr('вас') if me else to))
     elif call:
-        parts.append('Передаёт %s.' % call)
+        parts.append(tr('Передаёт %s.') % call)
     if rst:
-        parts.append('Ваш рапорт %s.' % rst if me or to == my else 'Рапорт %s.' % rst)
+        parts.append(tr('Ваш рапорт %s.') % rst if me or to == my else tr('Рапорт %s.') % rst)
     if name:
-        parts.append('Оператор %s.' % name)
+        parts.append(tr('Оператор %s.') % name)
     if qth:
         parts.append('QTH %s.' % qth)
     if kind == 'final':
-        parts.append('Благодарит за связь, 73 — конец связи.')
+        parts.append(tr('Благодарит за связь, 73 — конец связи.'))
     gl = []
     for w in dict.fromkeys(words):
         if w in GLOSSARY and w not in ('DE', 'CQ') and len(gl) < 8:
-            gl.append('%s — %s' % (w, GLOSSARY[w]))
+            gl.append('%s — %s' % (w, tr(GLOSSARY[w])))
     if gl:
         parts.append('(' + '; '.join(gl) + ')')
     if over and kind != 'final':
-        parts.append('Ждёт ответа.')
+        parts.append(tr('Ждёт ответа.'))
     good = sum(1 for x in (call, rst, name, qth) if x)
-    return {'clean': t, 'ru': ' '.join(parts) or 'Не удалось понять — слишком много ошибок приёма.',
+    return {'clean': t, 'ru': ' '.join(parts) or tr('Не удалось понять — слишком много ошибок приёма.'),
             'call': call, 'to': to, 'rst': rst, 'name': name, 'qth': qth, 'kind': kind,
             'calls_me': me, 'over': over, 'confidence': round(min(0.9, 0.3 + 0.15 * good), 2),
-            'model': 'правила (без ИИ)'}
+            'model': tr('правила (без ИИ)')}
 
 
 def reply_rules(history, analysis, op):
@@ -327,14 +329,14 @@ def reply_rules(history, analysis, op):
     sent_report = any(re.search(r'\bRST\b|\b5NN\b|\b599\b|\bUR [1-5]', h.get('text', '')) for h in mine)
     sent_73 = any(re.search(r'\b73\b|<SK>', h.get('text', '')) for h in mine)
     if not my:
-        return {'text': '', 'ru': 'Укажите свой позывной', 'model': 'шаблон'}
+        return {'text': '', 'ru': tr('Укажите свой позывной'), 'model': tr('шаблон')}
     if not call:
-        return {'text': 'QRZ? DE %s K' % my, 'ru': 'Кто меня зовёт? Позывной не разобран.', 'model': 'шаблон'}
+        return {'text': 'QRZ? DE %s K' % my, 'ru': tr('Кто меня зовёт? Позывной не разобран.'), 'model': tr('шаблон')}
     kind = a.get('kind')
     if kind == 'cq' and not mine:
-        return {'text': '%s DE %s %s K' % (call, my, my), 'ru': 'Отвечаю на CQ станции %s.' % call, 'model': 'шаблон'}
+        return {'text': '%s DE %s %s K' % (call, my, my), 'ru': tr('Отвечаю на CQ станции %s.') % call, 'model': tr('шаблон')}
     if sent_73:
-        return {'text': '', 'ru': 'Связь уже завершена (73 переданы).', 'model': 'шаблон'}
+        return {'text': '', 'ru': tr('Связь уже завершена (73 переданы).'), 'model': tr('шаблон')}
     if not sent_report:
         seg = ['%s DE %s' % (call, my), 'TNX FER CALL', 'UR RST 599 599']
         if op.get('my_name'):
@@ -343,10 +345,10 @@ def reply_rules(history, analysis, op):
             seg.append('QTH %s %s' % ((op['my_qth'].upper(),) * 2))
         seg.append('HW? %s DE %s KN' % (call, my))
         return {'text': ' = '.join(seg[:1]) + ' ' + ' = '.join(seg[1:]),
-                'ru': 'Даю %s рапорт 599%s%s и спрашиваю, как слышно.' % (
-                    call, ', имя' if op.get('my_name') else '', ', QTH' if op.get('my_qth') else ''),
-                'model': 'шаблон'}
+                'ru': tr('Даю %s рапорт 599%s%s и спрашиваю, как слышно.') % (
+                    call, tr(', имя') if op.get('my_name') else '', ', QTH' if op.get('my_qth') else ''),
+                'model': tr('шаблон')}
     name = a.get('name') or next((h['name'] for h in reversed(history or []) if h.get('name')), '')
     nm = (' ' + name) if name else ''
     return {'text': 'R %s DE %s TNX FER QSO%s = 73 GL <SK> %s DE %s TU' % (call, my, nm, call, my),
-            'ru': 'Благодарю %s за связь и завершаю (73, SK).' % call, 'model': 'шаблон'}
+            'ru': tr('Благодарю %s за связь и завершаю (73, SK).') % call, 'model': tr('шаблон')}

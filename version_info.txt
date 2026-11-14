@@ -1,16 +1,16 @@
 VSVersionInfo(
-  ffi=FixedFileInfo(filevers=(2, 10, 0, 0), prodvers=(2, 10, 0, 0), mask=0x3f, flags=0x0, OS=0x40004,
+  ffi=FixedFileInfo(filevers=(2, 10, 2, 0), prodvers=(2, 10, 2, 0), mask=0x3f, flags=0x0, OS=0x40004,
                     fileType=0x1, subtype=0x0, date=(0, 0)),
   kids=[
     StringFileInfo([StringTable('041904B0', [
       StringStruct('CompanyName', 'R6AAF'),
       StringStruct('FileDescription', 'FTX-1 Pult - remote control for Yaesu FTX-1'),
-      StringStruct('FileVersion', '2.10.0.0'),
+      StringStruct('FileVersion', '2.10.2.0'),
       StringStruct('InternalName', 'FTX1-Pult'),
       StringStruct('LegalCopyright', 'R6AAF'),
       StringStruct('OriginalFilename', 'FTX1-Pult.exe'),
       StringStruct('ProductName', 'FTX-1 Pult'),
-      StringStruct('ProductVersion', '2.10.0.0')])]),
+      StringStruct('ProductVersion', '2.10.2.0')])]),
     VarFileInfo([VarStruct('Translation', [0x0419, 1200])])
   ]
 )

@@ -4,9 +4,6 @@
 name: Build FTX1-Pult.exe
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    tags: ['v*']
 permissions:
   contents: write
 jobs:
@@ -19,17 +16,15 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt setuptools
+      - name: Language regression tests
+        run: python -m unittest discover -s tests -v
       # FT8/FT4: модуль _ftx из ft8_lib (C, MIT) — собирается компилятором MSVC
       - name: Модуль FT8 (_ftx)
         working-directory: server
         run: python setup_ftx.py build_ext --inplace
       # Справочник стран для FT8 (Country Files, AD1C). Не скачался — программа скачает сама при запуске.
-      - name: cty.dat
-        shell: pwsh
-        run: |
-          try { Invoke-WebRequest https://www.country-files.com/cty/cty.dat -OutFile server\cty.dat -TimeoutSec 60 }
-          catch { Write-Host "cty.dat не скачан: $_"; Set-Content server\cty.dat '' }
-          (Get-Item server\cty.dat).Length
+      - name: Fetch validated DXCC database
+        run: python .github/scripts/fetch_cty.py
       # Загрузчик PyInstaller собираем из исходников: готовый загрузчик из pip
       # антивирусы (Microsoft Defender) часто ложно считают «Wacatac».
       - name: PyInstaller с собственным загрузчиком
@@ -58,21 +53,8 @@ jobs:
           $p = Start-Process dist\FTX1-Pult.exe -ArgumentList '--selftest','selftest.txt' -Wait -PassThru
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { exit 1 }
-      - name: Проверка запуска сервера (симулятор)
-        shell: pwsh
-        run: |
-          '{"open_panel": false, "auto_connect": true}' | Set-Content dist\config.json
-          $p = Start-Process dist\FTX1-Pult.exe -ArgumentList '--sim','--background' -PassThru
-          Start-Sleep -Seconds 12
-          $ping = (Invoke-WebRequest http://127.0.0.1:8080/api/ping -UseBasicParsing).Content
-          $panel = (Invoke-WebRequest http://127.0.0.1:8080/panel.html -UseBasicParsing).StatusCode
-          $pult = (Invoke-WebRequest http://127.0.0.1:8080/ -UseBasicParsing).StatusCode
-          "ping: $ping  panel: $panel  pult: $pult"
-          Get-Content dist\ftx1-pult.log
-          Stop-Process -Id $p.Id -Force
-          Remove-Item dist\config.json, dist\cert.pem, dist\key.pem, dist\ftx1-pult.log -ErrorAction SilentlyContinue
-          if (-not $ping.StartsWith('FTX1') -or $panel -ne 200 -or $pult -ne 200) { exit 1 }
-          if (Select-String -Path selftest.txt -Pattern 'FAIL' -Quiet) { exit 1 }
+      - name: Packaged Windows startup, Exit and restart
+        run: python .github/scripts/check_lifecycle.py dist/FTX1-Pult.exe
       - uses: actions/upload-artifact@v4
         with:
           name: FTX1-Pult
@@ -80,6 +62,10 @@ jobs:
             dist/FTX1-Pult.exe
             dist/FTX1-Pult-folder.zip
             dist/SHA256.txt
+            dist/lifecycle.txt
+            selftest.txt
+            LANGUAGES.md
+            README.md
       - name: Релиз «последняя сборка»
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2

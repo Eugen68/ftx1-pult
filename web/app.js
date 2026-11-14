@@ -40,7 +40,7 @@ const W_CW = [500, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 600, 800, 12
 const S_CAL = [[0, 0], [12, 1], [27, 2], [40, 3], [55, 4], [65, 5], [80, 6], [95, 7], [112, 8], [130, 9], [150, 10], [172, 11], [190, 12], [220, 13], [240, 14], [255, 15]];
 const PO_CAL = [[0, 0], [10, .8], [50, 8], [100, 26], [150, 54], [200, 92], [250, 140]];
 const SWR_CAL = [[0, 1], [12, 1], [39, 1.35], [65, 1.5], [89, 2], [242, 5], [255, 6]];
-const MENU_GROUPS = { '01': 'Виды работы', '02': 'CW', '03': 'Работа', '04': 'Дисплей', '05': 'Дата/время', '06': 'APRS', '07': 'APRS маяк', '08': 'APRS фильтр', '09': 'Пресеты', '11': 'Bluetooth' };
+const MENU_GROUPS = { '01': I18n.t('Виды работы'), '02': 'CW', '03': I18n.t('Работа'), '04': I18n.t('Дисплей'), '05': I18n.t('Дата/время'), '06': 'APRS', '07': I18n.t('APRS маяк'), '08': I18n.t('APRS фильтр'), '09': I18n.t('Пресеты'), '11': 'Bluetooth' };
 
 const isCW = m => /^CW/.test(m || '');
 const isLower = m => /^(LSB|CW-L|DATA-L|RTTY-L)$/.test(m || '');
@@ -72,7 +72,7 @@ const C = {                         // состояние клиента
   span: 4000, bw: 0,                      // действующий обзор и измеренная полоса звука трансивера
 };
 const opts = Object.assign({ echo: false, ns: false, agc: false, muteTx: true, pttMode: 'hold', space: true, palette: 'classic', micGain: 100, micId: '',
-  sqMode: 'radio', sqThr: -60, tail: 500, scale: 'auto', hotkeys: true }, store.get('opts', {}));
+  sqMode: 'radio', sqThr: -60, tail: 500, rxBuffer: 240, scale: 'auto', hotkeys: true }, store.get('opts', {}));
 if ((opts.v | 0) < 2) {           // 1.8: обработка браузера для эфира по умолчанию выключена (портила голос)
   opts.echo = false; opts.ns = false; opts.agc = false; opts.v = 2; store.set('opts', opts);
 }
@@ -94,22 +94,70 @@ function remapVfo() {                     // MAIN/SUB переключили —
 }
 function act(a, arg) { send({ t: 'act', a, arg }); }
 
+function retryConnection() {
+  if (C.shuttingDown) return;
+  const old = C.ws;
+  C.ws = null; // Ignore late events from the abandoned socket.
+  if (old) { try { old.close(); } catch {} }
+  pttUp();
+  C.txOwner = false;
+  C.txStart = 0;
+  updatePtt();
+  connect();
+}
+function checkConnection(probe = false) {
+  if (C.shuttingDown) return;
+  const ws = C.ws, now = Date.now();
+  if (!ws || ws.readyState > 1 || now - C.lastMessage > 20000) {
+    retryConnection();
+    return;
+  }
+  if (probe && ws.readyState === 1) {
+    clearTimeout(C.probeTimer);
+    const stamp = C.probeStamp = now;
+    send({ t: 'ping', ts: stamp });
+    C.probeTimer = setTimeout(() => {
+      if (C.ws === ws && C.probeStamp === stamp) retryConnection();
+    }, 4000);
+  }
+}
 function connect() {
+  if (C.shuttingDown) return;
+  clearTimeout(C.reconnectTimer);
+  clearTimeout(C.probeTimer);
+  C.probeStamp = null;
+  C.authed = false;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}/ws`);
   ws.binaryType = 'arraybuffer';
   C.ws = ws;
-  ws.onopen = () => send({ t: 'hello', pw: C.pw, rate: C.rate || 16000 });
+  C.lastMessage = Date.now();
+  ws.onopen = () => { if (C.ws === ws) send({ t: 'hello', pw: C.pw, rate: C.rate || 16000 }); };
   ws.onclose = () => {
-    C.authed = false; setLink(false, 'нет связи с сервером');
+    if (C.ws !== ws) return;
+    clearTimeout(C.probeTimer);
+    pttUp();
+    C.authed = false; setLink(false, C.shuttingDown ? I18n.t('Сервер остановлен — после запуска обновите страницу') : I18n.t('нет связи с сервером'));
     if (C.txOwner) { C.txOwner = false; updatePtt(); }
-    setTimeout(connect, 2000);
+    if (!C.shuttingDown) C.reconnectTimer = setTimeout(retryConnection, 2000);
   };
   ws.onmessage = (e) => {
+    if (C.ws !== ws) return;
+    C.lastMessage = Date.now();
     if (typeof e.data !== 'string') return onBinary(new Uint8Array(e.data));
     const m = JSON.parse(e.data);
     switch (m.t) {
+      case 'pong':
+        if (m.ts === C.probeStamp) { clearTimeout(C.probeTimer); C.probeStamp = null; }
+        break;
+      case 'server_stopping':
+        C.shuttingDown = true;
+        C.ws.close();
+        break;
+      case 'language': I18n.sync(m.language); break;
+      case 'language_error': $('#language').value = m.language; toast(m.msg, 5000); break;
       case 'hello_ok':
+        I18n.sync(m.language);
         C.authed = true; C.local = m.local; C.info = m;
         if (!m.local && C.pw) store.set('pw', C.pw);
         if (!C.rate) {                                   // первый вход: на этом ПК — максимальное качество
@@ -120,7 +168,7 @@ function connect() {
         $('#login').classList.add('hidden');
         $('#btnPanel').classList.toggle('hidden', !m.local);
         fillSelect($('.ctl[data-k=ctcss] select'), m.ctcss.map((v, i) => [i, v.toFixed(1)]));
-        $('#srvInfo').textContent = `Сервер v${m.version}. PTT: ${m.ptt_method}. Ограничение передачи: ${m.max_tx} с.` + (m.audio_err ? ` ЗВУК: ${m.audio_err}` : '');
+        $('#srvInfo').textContent = I18n.t`Сервер v${m.version}. PTT: ${m.ptt_method}. Ограничение передачи: ${m.max_tx} с.` + (m.audio_err ? I18n.t` ЗВУК: ${m.audio_err}` : '');
         setWfMsg(m.audio_err);
         updateSpan(true);
         send({ t: 'cw_hello' }); cwDesk.resend(); digiDesk.resend(); digi2.resend(); ft8Desk.resend(); voiceCq.hello(); qsoRec.hello();
@@ -130,7 +178,7 @@ function connect() {
         if (C.pw) { store.set('pw', ''); }          // неверный сохранённый пароль больше не подставляем
         C.pw = '';
         $('#login').classList.remove('hidden');
-        $('#loginMsg').textContent = m.first ? 'Введите пароль сервера' : m.msg;
+        $('#loginMsg').textContent = m.first ? I18n.t('Введите пароль сервера') : m.msg;
         $('#loginPw').value = ''; setTimeout(() => $('#loginPw').focus(), 50);
         break;
       case 'state': applyState(m.s, m.full); if (Object.keys(m.s).some(k => /^fw\d$|^radio_id$/.test(k))) renderFw(); break;
@@ -158,6 +206,15 @@ function connect() {
   };
 }
 
+setInterval(() => {
+  if (C.probeStamp == null) checkConnection(true);
+}, 5000);
+window.addEventListener('online', () => checkConnection(true));
+window.addEventListener('pageshow', () => checkConnection(true));
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) checkConnection(true);
+});
+
 function onBinary(b) {
   const type = b[0];
   if (type === 1 && C.player) {
@@ -180,8 +237,8 @@ function onBinary(b) {
 function setWfMsg(err) {
   const el = $('#wfMsg');
   el.classList.toggle('hidden', !err);
-  if (err) el.innerHTML = `<div><b>Нет звука с трансивера</b>${err.replace(/[&<]/g, c => c === '&' ? '&amp;' : '&lt;')}` +
-    (C.local ? '<br><br>Выберите устройства в панели управления сервером (кнопка ⚙ вверху).' : '') + '</div>';
+  if (err) el.innerHTML = I18n.t`<div><b>Нет звука с трансивера</b>${err.replace(/[&<]/g, c => c === '&' ? '&amp;' : '&lt;')}` +
+    (C.local ? I18n.t('<br><br>Выберите устройства в панели управления сервером (кнопка ⚙ вверху).') : '') + '</div>';
 }
 function setLink(ok, text) {
   $('#linkDot').className = 'dot ' + (ok ? 'ok' : 'bad');
@@ -201,14 +258,14 @@ function applyState(d, full) {
   }
   if ('connected' in d || 'radio_id' in d || 'fw0' in d || 'pwr_head' in d) {
     const head = S.pwr_head === 2 ? 'Optima/SPA-1' : (S.pwr_head === 1 ? 'Field' : '');
-    setLink(S.connected, S.connected ? `${S.radio_id === '0840' ? 'FTX-1' : 'ID ' + (S.radio_id || '?')} ${head} ${S.fw0 ? 'FW ' + S.fw0 : ''}` : 'трансивер не отвечает');
+    setLink(S.connected, S.connected ? `${S.radio_id === '0840' ? 'FTX-1' : 'ID ' + (S.radio_id || '?')} ${head} ${S.fw0 ? 'FW ' + S.fw0 : ''}` : I18n.t('трансивер не отвечает'));
   }
   renderFreq();
   renderMeters();
   renderBadges();
   renderControls(d);
   drawOverlay();
-  if ('tuning' in d) $('#tuneState').textContent = S.tuning ? 'Идёт настройка…' : '';
+  if ('tuning' in d) $('#tuneState').textContent = S.tuning ? I18n.t('Идёт настройка…') : '';
   if ('tx' in d) document.body.classList.toggle('txon', !!S.tx);
   if ('mode' in d) { C.autoLock = null; C.bwHist = []; updateSpan(true); renderSq(); pushGate(); renderCenterBtn(); }
   if ('busy' in d || 'tx' in d) pushGate();
@@ -235,7 +292,7 @@ function renderBadges() {
   $$('#modes .btn').forEach(b => b.classList.toggle('on', b.dataset.m === S.mode));
   const bd = bandOf(S.freq_a || 0);
   $$('#bands .btn').forEach(b => b.classList.toggle('on', !!bd && b.dataset.b === bd[0]));
-  if (S.power != null) $('#pwrInfo').textContent = `${S.power} Вт`;
+  if (S.power != null) $('#pwrInfo').textContent = I18n.t`${S.power} Вт`;
 }
 
 const fmtFreq = f => { const s = String(Math.round(f)).padStart(7, '0'); return `${s.slice(0, -6)}.${s.slice(-6, -3)}.${s.slice(-3)}`; };
@@ -267,7 +324,7 @@ function renderMeters() {
     let w = interp(PO_CAL, S.po || 0);
     if (S.pwr_head !== 2) w = w / 10;
     const maxW = S.pwr_head === 2 ? 100 : 10;
-    setBar('#mPo', w / (maxW * 1.2), `≈${w.toFixed(w < 10 ? 1 : 0)} Вт`);
+    setBar('#mPo', w / (maxW * 1.2), I18n.t`≈${w.toFixed(w < 10 ? 1 : 0)} Вт`);
     const swr = interp(SWR_CAL, S.swr || 0);
     setBar('#mSwr', (swr - 1) / 4, swr.toFixed(1));
     setBar('#mAlc', (S.alc || 0) / 255, Math.round((S.alc || 0) / 2.55) + '%');
@@ -425,7 +482,7 @@ function rememberBand() {
 for (const b of BANDS) {
   const el = document.createElement('button');
   el.className = 'btn'; el.dataset.b = b[0];
-  el.textContent = /^\d+$/.test(b[0]) ? (b[0] === '70' ? '70см' : b[0] + 'м') : b[0];
+  el.textContent = /^\d+$/.test(b[0]) ? (b[0] === '70' ? I18n.t('70см') : b[0] + I18n.t('м')) : b[0];
   // кнопка диапазона = кнопка BAND на трансивере: он сам восстанавливает свою частоту, вид работы,
   // полосу и прочее для этого диапазона (код BS совпадает с порядком в BANDS)
   const code = BANDS.indexOf(b);
@@ -447,10 +504,10 @@ function fillSelect(sel, pairs) {
 function fmtVal(el, v) {
   const f = el.dataset.fmt;
   if (v == null) return '—';
-  if (f === 'width') return (v == 0 ? 'по умолч. ' : '') + widthHz(v, S.mode) + ' Гц';
-  if (f === 'apf') return ((v - 25) * 10) + ' Гц';
-  if (f === 'delay') return delayMs(v) + ' мс';
-  if (f === 'pitch') return (300 + v * 10) + ' Гц';
+  if (f === 'width') return (v == 0 ? I18n.t('по умолч. ') : '') + widthHz(v, S.mode) + I18n.t(' Гц');
+  if (f === 'apf') return ((v - 25) * 10) + I18n.t(' Гц');
+  if (f === 'delay') return delayMs(v) + I18n.t(' мс');
+  if (f === 'pitch') return (300 + v * 10) + I18n.t(' Гц');
   return String(v);
 }
 function ctlValue(k) {
@@ -484,7 +541,7 @@ function initControls() {
         clearTimeout(r._t); r._t = setTimeout(() => setParam(k, +r.value), 120);
       };
       if (el.dataset.reset != null) b.ondblclick = () => { r.value = el.dataset.reset; r.oninput(); };
-      if (el.dataset.reset != null) b.title = 'Двойной клик — сброс';
+      if (el.dataset.reset != null) b.title = I18n.t('Двойной клик — сброс');
     }
   }
 }
@@ -500,7 +557,7 @@ function renderControls(d) {
       const sel = $('select', el);
       if (k === 'preamp') {
         const want = bandType() ? 'vhf' : 'hf';
-        if (sel.dataset.kind !== want) { sel.dataset.kind = want; fillSelect(sel, want === 'hf' ? [[0, 'IPO'], [1, 'AMP1'], [2, 'AMP2']] : [[0, 'Выкл'], [1, 'Вкл']]); }
+        if (sel.dataset.kind !== want) { sel.dataset.kind = want; fillSelect(sel, want === 'hf' ? [[0, 'IPO'], [1, 'AMP1'], [2, 'AMP2']] : [[0, I18n.t('Выкл')], [1, I18n.t('Вкл')]]); }
       }
       if (v != null && document.activeElement !== sel) sel.value = v;
       continue;
@@ -679,7 +736,7 @@ function audioToRf(a) {
 }
 function tuneToAudio(a) {
   const m = S.mode, f = S.freq_a || 0;
-  if (isAMFM(m)) { toast('В AM/FM подстройка по водопаду недоступна'); return; }
+  if (isAMFM(m)) { toast(I18n.t('В AM/FM подстройка по водопаду недоступна')); return; }
   const target = isCW(m) ? pitchHz() : 1500;
   setFreq(Math.round((isLower(m) ? f - (a - target) : f + (a - target)) / 10) * 10);
 }
@@ -692,7 +749,7 @@ function tuneToAudio(a) {
   w.addEventListener('pointermove', e => {
     const a = aAt(e), r = w.getBoundingClientRect();
     cur.style.display = 'block'; cur.style.left = (e.clientX - r.left) + 'px';
-    cur.dataset.f = `${Math.round(a)} Гц · ${fmtFreq(audioToRf(a))}`;
+    cur.dataset.f = I18n.t`${Math.round(a)} Гц · ${fmtFreq(audioToRf(a))}`;
   });
   w.addEventListener('pointerleave', () => { cur.style.display = 'none'; });
   w.addEventListener('dblclick', e => { if (C.tab === 'ft8') ft8Desk.pickWf(aAt(e), 'both'); else tuneToAudio(aAt(e)); });
@@ -738,7 +795,7 @@ function updateSpan(force) {
   const span = C.wfMax || autoSpan();
   $$('#spanSeg button').forEach(x => x.classList.toggle('on', +x.dataset.v === C.wfMax));
   const ab = $('#spanSeg button[data-v="0"]');
-  ab.textContent = C.wfMax ? 'Авто' : `Авто ${(span / 1000).toFixed(span % 1000 ? 1 : 0)}k`;
+  ab.textContent = C.wfMax ? I18n.t('Авто') : I18n.t`Авто ${(span / 1000).toFixed(span % 1000 ? 1 : 0)}k`;
   if (span === C.span && !force) return;
   C.span = span; wf.canvas.width = 0;
   send({ t: 'wf', on: true, max: span }); drawOverlay();
@@ -773,7 +830,7 @@ function renderSq() {
   $('#sqLevelCtl').classList.toggle('hidden', opts.sqMode !== 'level');
   if (S.sql != null && !(C.lockUntil.sql > performance.now())) $('#sqRadio').value = S.sql;
   $('#sqRadioV').textContent = S.sql ?? '—';
-  $('#sqThr').value = opts.sqThr; $('#sqThrV').textContent = opts.sqThr + ' дБ';
+  $('#sqThr').value = opts.sqThr; $('#sqThrV').textContent = opts.sqThr + I18n.t(' дБ');
 }
 $$('#sqMode button').forEach(b => b.onclick = () => { opts.sqMode = b.dataset.v; saveOpts(); renderSq(); pushGate(); });
 $('#sqThr').oninput = e => { opts.sqThr = +e.target.value; saveOpts(); renderSq(); pushGate(); };
@@ -785,7 +842,7 @@ $('#sqRadio').oninput = e => {
 
 // ------------------------------------------------------------------ звук приёма
 async function ensureAudioContext() {
-  if (C.ac) { if (C.ac.state === 'suspended') await C.ac.resume(); return C.ac; }
+  if (C.ac) { if (C.ac.state === 'suspended' || C.ac.state === 'interrupted') await C.ac.resume(); return C.ac; }
   const AC = window.AudioContext || window.webkitAudioContext;
   let ac;
   try { ac = new AC({ latencyHint: 'interactive', sampleRate: 48000 }); }   // 48 кГц — как у трансивера
@@ -793,34 +850,91 @@ async function ensureAudioContext() {
   await ac.audioWorklet.addModule('worklets.js');
   C.ac = ac;
   C.player = new AudioWorkletNode(ac, 'rx-player', { outputChannelCount: [2] });
-  C.player.connect(ac.destination);
+  // A real media element lets mobile browsers treat RX as background playback.
+  // Keep the worklet as the only signal path: never play both destinations.
+  if (typeof ac.createMediaStreamDestination === 'function') {
+    C.rxDestination = ac.createMediaStreamDestination();
+    C.rxAudio = document.createElement('audio');
+    C.rxAudio.setAttribute('playsinline', '');
+    C.rxAudio.hidden = true;
+    C.rxAudio.srcObject = C.rxDestination.stream;
+    document.body.appendChild(C.rxAudio);
+    C.player.connect(C.rxDestination);
+  } else {
+    C.player.connect(ac.destination);
+  }
   C.player.port.postMessage({ rate: C.rate || 16000 });
+  C.player.port.postMessage({ bufferMs: opts.rxBuffer });
   C.player.port.onmessage = e => {
     if (e.data.sq) {
       const q = e.data.sq;
       $('#sqLamp').className = 'sq-lamp ' + (C.audioOn ? (q.open ? 'open' : 'closed') : '');
-      $('#sqLvl').textContent = C.audioOn ? `${Math.round(q.lvl)} дБ` : '';
+      $('#sqLvl').textContent = C.audioOn ? I18n.t`${Math.round(q.lvl)} дБ` : '';
       return;
     }
     const s = e.data.stat; if (!s) return;
-    $('#audioStat').textContent = `Приём: ${C.rate / 1000} кГц, звуковая карта ${ac.sampleRate / 1000} кГц, буфер ${s.ms} мс, ` +
-      `пропусков ${s.under}, подстройка ${((s.adj - 1) * 100).toFixed(2)} %`;
+    $('#audioStat').textContent = I18n.t`Приём: ${C.rate / 1000} кГц, звуковая карта ${ac.sampleRate / 1000} кГц, буфер ${s.ms} мс, ` +
+      I18n.t`пропусков ${s.under}, подстройка ${((s.adj - 1) * 100).toFixed(2)} %` +
+      I18n.t` (целевой буфер: ${s.target} мс)`;
   };
   C.player.port.postMessage({ gain: C.gain });
   pushGate();
+  if (ac.state === 'suspended' || ac.state === 'interrupted') await ac.resume();
   return ac;
 }
-$('#btnAudio').onclick = async () => {
+function updateReceiveAudio(on) {
+  C.audioOn = on;
+  C.player && C.player.port.postMessage({ reset: true });
+  send({ t: 'audio', on, rate: C.rate });
+  $('#btnAudio').textContent = on ? I18n.t('🔊 Звук') : I18n.t('🔇 Звук');
+  $('#btnAudio').classList.toggle('on', on);
+  store.set('audioOn', on);
+  if (navigator.mediaSession) {
+    try { navigator.mediaSession.playbackState = on ? 'playing' : 'paused'; } catch {}
+  }
+}
+async function setReceiveAudio(on) {
+  // Serialize user/lock-screen controls without allowing an old play() to undo Stop.
+  const request = C.rxRequest = (C.rxRequest || 0) + 1;
+  if (!on) {
+    if (C.rxAudio) C.rxAudio.pause();
+    updateReceiveAudio(false);
+    return;
+  }
   try {
     await ensureAudioContext();
-  } catch (e) { toast('Звук недоступен: ' + e.message); return; }
-  C.audioOn = !C.audioOn;
-  C.player.port.postMessage({ reset: true });
-  send({ t: 'audio', on: C.audioOn, rate: C.rate });
-  $('#btnAudio').textContent = C.audioOn ? '🔊 Звук' : '🔇 Звук';
-  $('#btnAudio').classList.toggle('on', !!C.audioOn);
-  store.set('audioOn', C.audioOn);
-};
+    if (request !== C.rxRequest) return;
+    if (C.rxAudio) await C.rxAudio.play();
+    if (request !== C.rxRequest) {
+      if (!C.audioOn && C.rxAudio) C.rxAudio.pause();
+      return;
+    }
+    updateReceiveAudio(true);
+    if (navigator.mediaSession && window.MediaMetadata) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: 'FTX-1', artist: I18n.t('Приём'),
+          artwork: [{ src: new URL('icon-512.png', location.href).href, sizes: '512x512', type: 'image/png' }],
+        });
+      } catch {}
+    }
+  } catch (e) {
+    if (request !== C.rxRequest) return;
+    if (C.rxAudio) C.rxAudio.pause();
+    updateReceiveAudio(false);
+    toast(I18n.t('Звук недоступен: ') + e.message);
+  }
+}
+$('#btnAudio').onclick = () => setReceiveAudio(!C.audioOn);
+if (navigator.mediaSession) {
+  for (const [action, on] of [['play', true], ['pause', false], ['stop', false]]) {
+    try { navigator.mediaSession.setActionHandler(action, () => setReceiveAudio(on)); } catch {}
+  }
+}
+// Recover interrupted contexts when returning to the app; never enable RX by itself.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && C.audioOn) setReceiveAudio(true);
+});
 $('#volume').value = C.gain * 100;
 $('#volume').oninput = e => { C.gain = e.target.value / 100; store.set('vol', +e.target.value); C.player && C.player.port.postMessage({ gain: C.gain }); };
 
@@ -828,29 +942,29 @@ $('#volume').oninput = e => { C.gain = e.target.value / 100; store.set('vol', +e
 function renderFw() {
   const names = ['MAIN', 'DISPLAY', 'SDR', 'DSP', 'SPA-1', 'FC-80'];
   const parts = names.map((n, i) => S['fw' + i] && S['fw' + i] !== '?' ? `${n} ${S['fw' + i]}` : '').filter(Boolean);
-  $('#fwInfo').textContent = parts.length ? 'Прошивки трансивера: ' + parts.join(' · ') : '';
+  $('#fwInfo').textContent = parts.length ? I18n.t('Прошивки трансивера: ') + parts.join(' · ') : '';
 }
 
 // ------------------------------------------------------------------ микрофон и PTT
 function micErrorText(e) {
   const n = e && e.name, m = (e && e.message) || '';
   if (n === 'NotAllowedError' && /system/i.test(m))
-    return 'Windows запрещает программам доступ к микрофону. Параметры Windows → Конфиденциальность и защита → ' +
-      'Микрофон: включите «Доступ к микрофону» и «Разрешить классическим приложениям доступ к микрофону», затем перезапустите браузер.';
+    return I18n.t('Windows запрещает программам доступ к микрофону. Параметры Windows → Конфиденциальность и защита → ') +
+      I18n.t('Микрофон: включите «Доступ к микрофону» и «Разрешить классическим приложениям доступ к микрофону», затем перезапустите браузер.');
   if (n === 'NotAllowedError' || n === 'SecurityError')
-    return 'браузер запретил микрофон для этого сайта. Нажмите значок слева от адреса → «Микрофон» → разрешить и обновите страницу.';
+    return I18n.t('браузер запретил микрофон для этого сайта. Нажмите значок слева от адреса → «Микрофон» → разрешить и обновите страницу.');
   if (n === 'NotFoundError' || n === 'OverconstrainedError')
-    return 'микрофон не найден. Подключите микрофон/гарнитуру или выберите другой в списке «Микрофон этого устройства» ' +
-      '(и проверьте, что он не отключён в Параметры → Система → Звук → Ввод).';
+    return I18n.t('микрофон не найден. Подключите микрофон/гарнитуру или выберите другой в списке «Микрофон этого устройства» ') +
+      I18n.t('(и проверьте, что он не отключён в Параметры → Система → Звук → Ввод).');
   if (n === 'NotReadableError' || n === 'AbortError')
-    return 'микрофон занят или не запускается: закройте программы, которые держат его монопольно (Discord, Zoom, OBS), ' +
-      'или снимите галочку «Разрешить приложениям монопольный режим» в свойствах микрофона.';
+    return I18n.t('микрофон занят или не запускается: закройте программы, которые держат его монопольно (Discord, Zoom, OBS), ') +
+      I18n.t('или снимите галочку «Разрешить приложениям монопольный режим» в свойствах микрофона.');
   return (n ? n + ': ' : '') + m;
 }
 async function startMic() {
   if (C.micStream) return true;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    toast('Микрофон недоступен: откройте пульт по https:// (или http://localhost на самом ПК)', 6000);
+    toast(I18n.t('Микрофон недоступен: откройте пульт по https:// (или http://localhost на самом ПК)'), 6000);
     return false;
   }
   const ac = await ensureAudioContext();
@@ -863,7 +977,7 @@ async function startMic() {
     });
   } catch (e) {
     const why = micErrorText(e);
-    toast('Нет доступа к микрофону: ' + why, 9000);
+    toast(I18n.t('Нет доступа к микрофону: ') + why, 9000);
     const r = $('#micTestRes'); if (r) r.textContent = '✗ ' + why;
     return false;
   }
@@ -891,7 +1005,7 @@ async function startMic() {
 }
 async function pttDown() {
   if (C.pttPressed) return;
-  if (C.pttBusy) { toast('Передача занята другим подключением'); return; }
+  if (C.pttBusy) { toast(I18n.t('Передача занята другим подключением')); return; }
   C.pttPressed = true; updatePtt();
   if (!(await startMic())) { C.pttPressed = false; updatePtt(); return; }
   if (!C.pttPressed) return;                // отпустили, пока включался микрофон
@@ -915,12 +1029,12 @@ function updatePtt() {
   b.classList.toggle('ready', !!C.micStream);
   b.classList.toggle('active', !!(C.pttPressed && C.txOwner));
   b.classList.toggle('busy', !!C.pttBusy);
-  $('#pttState').textContent = C.pttBusy ? 'Передаёт другой клиент'
-    : C.pttPressed ? (C.txOwner ? 'ПЕРЕДАЧА' : 'Включаю…')
-      : C.micStream ? 'Микрофон готов' : 'Микрофон — по PTT';
+  $('#pttState').textContent = C.pttBusy ? I18n.t('Передаёт другой клиент')
+    : C.pttPressed ? (C.txOwner ? I18n.t('ПЕРЕДАЧА') : I18n.t('Включаю…'))
+      : C.micStream ? I18n.t('Микрофон готов') : I18n.t('Микрофон — по PTT');
 }
 setInterval(() => {
-  $('#txTimer').textContent = (C.txOwner && C.txStart) ? `TX ${Math.floor((performance.now() - C.txStart) / 1000)} с` : '';
+  $('#txTimer').textContent = (C.txOwner && C.txStart) ? I18n.t`TX ${Math.floor((performance.now() - C.txStart) / 1000)} с` : '';
 }, 250);
 (() => {
   const b = $('#ptt');
@@ -943,7 +1057,7 @@ $$('#tabs button').forEach(b => b.onclick = () => {
   C.tab = b.dataset.tab;
   document.body.classList.toggle('tab-ft8', C.tab === 'ft8');
   const hint = $('#wfHint');
-  if (hint) hint.textContent = C.tab === 'ft8' ? 'Клик — RX, правый клик / Shift — TX, двойной — оба' : 'Двойной клик — настроиться на сигнал';
+  if (hint) hint.textContent = C.tab === 'ft8' ? I18n.t('Клик — RX, правый клик / Shift — TX, двойной — оба') : I18n.t('Двойной клик — настроиться на сигнал');
   window.ft8Desk && ft8Desk.marks();
   if (typeof updateSpan === 'function') updateSpan();
   requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
@@ -956,7 +1070,7 @@ function buildMenu(items) {
   menu.items = items;
   const groups = [...new Set(items.map(i => i.ex.slice(0, 4)))];
   const secName = {}; items.forEach(i => secName[i.ex.slice(0, 4)] = i.section);
-  fillSelect($('#menuGroup'), [['', 'Все разделы'], ...groups.map(g => [g, `${g} ${MENU_GROUPS[g.slice(0, 2)] || ''}: ${secName[g]}`])]);
+  fillSelect($('#menuGroup'), [['', I18n.t('Все разделы')], ...groups.map(g => [g, `${g} ${MENU_GROUPS[g.slice(0, 2)] || ''}: ${secName[g]}`])]);
   renderMenu();
 }
 function menuFiltered() {
@@ -971,12 +1085,12 @@ function renderMenu() {
   for (const i of list.slice(0, 450)) {
     const s = i.ex.slice(0, 4);
     if (s !== sec) { sec = s; html += `<div class="menu-sec">EX${s} · ${MENU_GROUPS[s.slice(0, 2)] || ''} · ${i.section}</div>`; }
-    const range = i.string ? 'текст' : `${i.min}…${i.max}`;
+    const range = i.string ? I18n.t('текст') : `${i.min}…${i.max}`;
     const v = menu.vals[i.ex] ?? '';
-    html += `<div class="mi" data-ex="${i.ex}"><span class="ex">EX${i.ex}</span><span class="nm">${i.name}${i.spa1 ? ' <small>только с SPA-1</small>' : ''}<small>${range}${i.hint ? ' · ' + i.hint : ''}</small></span><input value="${v}" placeholder="?"><button class="btn small">✓</button></div>`;
+    html += `<div class="mi" data-ex="${i.ex}"><span class="ex">EX${i.ex}</span><span class="nm">${i.name}${i.spa1 ? I18n.t(' <small>только с SPA-1</small>') : ''}<small>${range}${i.hint ? ' · ' + i.hint : ''}</small></span><input value="${v}" placeholder="?"><button class="btn small">✓</button></div>`;
   }
-  if (list.length > 450) html += `<p class="muted small">Показаны первые 450 из ${list.length}. Уточните поиск.</p>`;
-  box.innerHTML = html || '<p class="muted">Ничего не найдено</p>';
+  if (list.length > 450) html += I18n.t`<p class="muted small">Показаны первые 450 из ${list.length}. Уточните поиск.</p>`;
+  box.innerHTML = html || I18n.t('<p class="muted">Ничего не найдено</p>');
 }
 function setMenuVal(ex, v) {
   menu.vals[ex] = v;
@@ -991,7 +1105,7 @@ $('#menuGroup').onchange = renderMenu;
 $('#menuReadAll').onclick = () => {
   if (!menu.items) return;
   const l = menuFiltered();
-  if (l.length > 120 && !confirm(`Прочитать ${l.length} пунктов? Это займёт около ${Math.ceil(l.length / 8)} с.`)) return;
+  if (l.length > 120 && !confirm(I18n.t`Прочитать ${l.length} пунктов? Это займёт около ${Math.ceil(l.length / 8)} с.`)) return;
   readMenu(l.map(i => i.ex));
 };
 $('#menuUsbShow').onclick = () => {
@@ -1003,7 +1117,7 @@ function menuCommit(row) {
   const ex = row.dataset.ex, item = menu.items.find(i => i.ex === ex), v = $('input', row).value.trim();
   if (!item.string) {
     const n = parseInt(v, 10);
-    if (!isFinite(n) || n < item.min || n > item.max) { toast(`Допустимо ${item.min}…${item.max}`); return; }
+    if (!isFinite(n) || n < item.min || n > item.max) { toast(I18n.t`Допустимо ${item.min}…${item.max}`); return; }
     send({ t: 'menu_set', ex, v: n });
   } else send({ t: 'menu_set', ex, v });
 }
@@ -1035,11 +1149,11 @@ $('#catClear').onclick = () => { $('#catOut').textContent = ''; };
   const box = $('#cwMems');
   for (let i = 1; i <= 5; i++) {
     const row = document.createElement('div'); row.className = 'cw-mem';
-    row.innerHTML = `<b>${i}</b><input class="text mono" maxlength="50"><button class="btn small">Записать</button><button class="btn small">▶ Передать</button>`;
+    row.innerHTML = I18n.t`<b>${i}</b><input class="text mono" maxlength="50"><button class="btn small">Записать</button><button class="btn small">▶ Передать</button>`;
     const inp = $('input', row); inp.value = texts[i - 1] || '';
     const [wr, play] = $$('button', row);
     inp.onchange = () => { texts[i - 1] = inp.value.toUpperCase(); inp.value = texts[i - 1]; store.set('cwMem', texts); };
-    wr.onclick = () => { act('cw_store', [i, inp.value]); toast(`Ячейка ${i} записана в трансивер`); };
+    wr.onclick = () => { act('cw_store', [i, inp.value]); toast(I18n.t`Ячейка ${i} записана в трансивер`); };
     play.onclick = () => act('cw_play', i);
     box.appendChild(row);
   }
@@ -1051,7 +1165,7 @@ function renderFavs() {
   box.innerHTML = '';
   favs.forEach((f, i) => {
     const el = document.createElement('span'); el.className = 'fav';
-    el.innerHTML = `<button class="btn">${f.name ? f.name + ' · ' : ''}${fmtFreq(f.f)} ${f.m || ''}</button><button class="btn small" title="Удалить">×</button>`;
+    el.innerHTML = I18n.t`<button class="btn">${f.name ? f.name + ' · ' : ''}${fmtFreq(f.f)} ${f.m || ''}</button><button class="btn small" title="Удалить">×</button>`;
     const [go, del] = $$('button', el);
     go.onclick = () => { setFreq(f.f); if (f.m) setTimeout(() => setParam('mode', f.m), 120); };
     del.onclick = () => { favs.splice(i, 1); store.set('favs', favs); renderFavs(); };
@@ -1069,7 +1183,7 @@ async function listMics() {
   try {
     const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
     const sel = $('#optMic'), cur = opts.micId;
-    fillSelect(sel, [['', 'По умолчанию'], ...devs.map((d, i) => [d.deviceId, d.label || `Микрофон ${i + 1}`])]);
+    fillSelect(sel, [['', I18n.t('По умолчанию')], ...devs.map((d, i) => [d.deviceId, d.label || I18n.t`Микрофон ${i + 1}`])]);
     sel.value = cur;
   } catch { }
 }
@@ -1079,6 +1193,10 @@ function resetMic() {
   updatePtt();
 }
 function initOpts() {
+  $('#language').onchange = e => {
+    if (!C.authed) { e.target.value = I18n.language; return; }
+    send({ t: 'set_language', language: e.target.value });
+  };
   $('#optTail').value = opts.tail; $('#optTailV').textContent = opts.tail;
   $('#optTail').oninput = e => { opts.tail = +e.target.value; $('#optTailV').textContent = opts.tail; saveOpts(); pushGate(); };
   $('#optScale').value = String(opts.scale);
@@ -1090,14 +1208,19 @@ function initOpts() {
     if (C.micNode) { C.micRate = C.rate; C.micNode.port.postMessage({ rate: C.rate }); }
     send({ t: 'audio', on: C.audioOn, rate: C.rate });
   };
+  $('#optRxBuffer').value = String(opts.rxBuffer);
+  $('#optRxBuffer').onchange = e => {
+    opts.rxBuffer = +e.target.value; saveOpts();
+    C.player && C.player.port.postMessage({ bufferMs: opts.rxBuffer });
+  };
   $('#optMic').onchange = e => { opts.micId = e.target.value; saveOpts(); resetMic(); };
   $('#micTest').onclick = async () => {
-    $('#micTestRes').textContent = 'Включаю микрофон…';
+    $('#micTestRes').textContent = I18n.t('Включаю микрофон…');
     if (await startMic()) {
-      const lab = C.micStream.getAudioTracks()[0]?.label || 'микрофон';
+      const lab = C.micStream.getAudioTracks()[0]?.label || I18n.t('микрофон');
       $('#micTestRes').textContent = /USB Audio (Device|CODEC)/i.test(lab)
-        ? '⚠ Сейчас выбран «' + lab + '» — это звуковая карта трансивера, а не ваш микрофон. Выберите свой в списке выше.'
-        : '✓ Работает: ' + lab + '. Скажите что-нибудь — полоска слева от PTT должна двигаться.';
+        ? I18n.t('⚠ Сейчас выбран «') + lab + I18n.t('» — это звуковая карта трансивера, а не ваш микрофон. Выберите свой в списке выше.')
+        : I18n.t('✓ Работает: ') + lab + I18n.t('. Скажите что-нибудь — полоска слева от PTT должна двигаться.');
     }
   };
   $('#optMicGain').value = opts.micGain; $('#optMicGainV').textContent = opts.micGain;
@@ -1119,7 +1242,7 @@ function initOpts() {
 // ------------------------------------------------------------------ вход, полноэкранный режим, PWA
 $('#loginBtn').onclick = () => {
   C.pw = $('#loginPw').value;              // запоминаем, только когда сервер пароль принял (hello_ok)
-  $('#loginMsg').textContent = 'Проверяю…';
+  $('#loginMsg').textContent = I18n.t('Проверяю…');
   if (C.ws && C.ws.readyState === 1) send({ t: 'hello', pw: C.pw, rate: C.rate || 16000 });
   else { try { C.ws && C.ws.close(); } catch { } connect(); }
 };
@@ -1160,21 +1283,21 @@ const cwDesk = (() => {
   function sendDec() { send({ t: 'cw_dec', on: st.dec, cyr: st.cyr, freq: st.freq, sq: st.sq }); }
   function renderDec() {
     $('#cwDecBtn').classList.toggle('on', st.dec);
-    $('#cwDecBtn').textContent = st.dec ? '● Декодер вкл' : '○ Декодер выкл';
+    $('#cwDecBtn').textContent = st.dec ? I18n.t('● Декодер вкл') : I18n.t('○ Декодер выкл');
     $$('#cwAlpha button').forEach(b => b.classList.toggle('on', (b.dataset.v === 'cyr') === st.cyr));
     $('#cwSq').value = st.sq;
     const sel = $('#cwFreq');
-    if (st.freq && ![...sel.options].some(o => +o.value === st.freq)) sel.add(new Option(st.freq + ' Гц', st.freq));
+    if (st.freq && ![...sel.options].some(o => +o.value === st.freq)) sel.add(new Option(st.freq + I18n.t(' Гц'), st.freq));
     sel.value = st.freq;
     if (!st.dec) { $('#cwInfo').textContent = '—'; C.cwMark = 0; drawOverlay(); }
   }
-  function toggle(on = !st.dec) { st.dec = on; store.set('cwDec', on); sendDec(); renderDec(); if (on) note('Декодер Морзе включён'); }
+  function toggle(on = !st.dec) { st.dec = on; store.set('cwDec', on); sendDec(); renderDec(); if (on) note(I18n.t('Декодер Морзе включён')); }
   function setFreq(hz) {
     if (!st.dec) toggle(true);
-    st.freq = clamp(hz, 200, 3000); sendDec(); renderDec(); note(`Декодер слушает ${st.freq} Гц`);
+    st.freq = clamp(hz, 200, 3000); sendDec(); renderDec(); note(I18n.t`Декодер слушает ${st.freq} Гц`);
   }
   const note = m => toast(m, 1600);
-  for (let f = 400; f <= 1000; f += 50) $('#cwFreq').add(new Option(f + ' Гц', f));
+  for (let f = 400; f <= 1000; f += 50) $('#cwFreq').add(new Option(f + I18n.t(' Гц'), f));
   $('#cwDecBtn').onclick = () => toggle();
   $$('#cwAlpha button').forEach(b => b.onclick = () => { st.cyr = b.dataset.v === 'cyr'; store.set('cwCyr', st.cyr); sendDec(); renderDec(); });
   $('#cwFreq').onchange = e => { st.freq = +e.target.value; sendDec(); };
@@ -1185,15 +1308,15 @@ const cwDesk = (() => {
   // ---- ИИ
   function renderAnalysis(a) {
     st.analysis = a;
-    if (!a) { $('#cwAiBody').innerHTML = '<span class="muted small">Разбора пока нет.</span>'; return; }
+    if (!a) { $('#cwAiBody').innerHTML = I18n.t('<span class="muted small">Разбора пока нет.</span>'); return; }
     if (a.call) st.lastCall = a.call;
     const me = a.calls_me && a.calls_me_strict;
     const chip = (k, v) => v ? `<span class="chip">${k} <b>${esc(v)}</b></span>` : '';
-    const kind = { cq: 'общий вызов CQ', answer: 'ответ на вызов', report: 'рапорт', final: 'завершение связи' }[a.kind] || '';
+    const kind = { cq: I18n.t('общий вызов CQ'), answer: I18n.t('ответ на вызов'), report: I18n.t('рапорт'), final: I18n.t('завершение связи') }[a.kind] || '';
     $('#cwAiBody').innerHTML = `<div class="clean">${esc(a.clean || a.raw)}</div><div class="ru">${esc(a.ru)}</div>
-      <div class="cw-chips">${me ? '<span class="chip me">Зовёт вас</span>' : ''}${chip('Позывной', a.call)}${chip('Кому', a.to)}
-      ${chip('RST вам', a.rst)}${chip('Имя', a.name)}${chip('QTH', a.qth)}${kind ? `<span class="chip">${kind}</span>` : ''}
-      ${a.confidence ? `<span class="chip">уверенность <b>${Math.round(a.confidence * 100)}%</b></span>` : ''}</div>`;
+      <div class="cw-chips">${me ? I18n.t('<span class="chip me">Зовёт вас</span>') : ''}${chip(I18n.t('Позывной'), a.call)}${chip(I18n.t('Кому'), a.to)}
+      ${chip(I18n.t('RST вам'), a.rst)}${chip(I18n.t('Имя'), a.name)}${chip('QTH', a.qth)}${kind ? `<span class="chip">${kind}</span>` : ''}
+      ${a.confidence ? I18n.t`<span class="chip">уверенность <b>${Math.round(a.confidence * 100)}%</b></span>` : ''}</div>`;
   }
   function aiStatus(text, bad) { const s = $('#cwAiStatus'); s.textContent = text; s.style.color = bad ? 'var(--tx)' : ''; }
   $('#cwAnalyze').onclick = () => send({ t: 'cw_ai_analyze' });
@@ -1204,13 +1327,13 @@ const cwDesk = (() => {
     clearInterval(st.propTimer);
     $('#cwProposal').classList.toggle('hidden', !p);
     if (!p) return;
-    const tpl = p.model === 'шаблон';
-    $('#cwPropTitle').textContent = (p.auto ? 'Автоответ' : 'Ответ') + (tpl ? ' (шаблон)' : ' ИИ');
+    const tpl = p.model === I18n.t('шаблон');
+    $('#cwPropTitle').textContent = (p.auto ? I18n.t('Автоответ') : I18n.t('Ответ')) + (tpl ? I18n.t(' (шаблон)') : I18n.t(' ИИ'));
     $('#cwPropText').textContent = p.text; $('#cwPropRu').textContent = p.ru || '';
     const end = performance.now() + p.left * 1000;
     const tick = () => {
       const s = Math.max(0, Math.ceil((end - performance.now()) / 1000));
-      $('#cwPropCount').textContent = p.auto ? `передача через ${s} с` : '';
+      $('#cwPropCount').textContent = p.auto ? I18n.t`передача через ${s} с` : '';
     };
     tick(); if (p.auto) st.propTimer = setInterval(tick, 200);
     st.prop = p;
@@ -1227,12 +1350,12 @@ const cwDesk = (() => {
   }
   const MACROS = [
     ['CQ', 'CQ CQ CQ DE {MY} {MY} {MY} K'],
-    ['Ответ', '{CALL} DE {MY} {MY} K'],
-    ['Рапорт', '{CALL} DE {MY} GM TNX FER CALL UR RST {RST} {RST} NAME {NAME} {NAME} QTH {QTH} {QTH} HW? {CALL} DE {MY} KN'],
+    [I18n.t('Ответ'), '{CALL} DE {MY} {MY} K'],
+    [I18n.t('Рапорт'), '{CALL} DE {MY} GM TNX FER CALL UR RST {RST} {RST} NAME {NAME} {NAME} QTH {QTH} {QTH} HW? {CALL} DE {MY} KN'],
     ['73', '{CALL} DE {MY} TNX FER QSO 73 GL <SK>'],
     ['AGN?', 'AGN? AGN?'],
     ['QRZ?', 'QRZ? DE {MY} K'],
-    ['Позывной', '{MY}'],
+    [I18n.t('Позывной'), '{MY}'],
   ];
   $('#cwMacros').innerHTML = MACROS.map(([n, t], i) => `<button class="btn" data-i="${i}" title="${esc(t)}">${n}</button>`).join('');
   $('#cwMacros').onclick = e => {
@@ -1241,7 +1364,7 @@ const cwDesk = (() => {
     const missing = (tpl.includes('{CALL}') && !st.lastCall) || (tpl.includes('{MY}') && !st.op.my_call);
     if (e.shiftKey || missing) {                                          // Shift — только вставить в поле
       $('#cwText').value = t; $('#cwText').focus();
-      if (missing) toast(!st.op.my_call ? 'Укажите свой позывной в разделе «Оператор»' : 'Позывной корреспондента ещё неизвестен — впишите его вместо «?»', 3500);
+      if (missing) toast(!st.op.my_call ? I18n.t('Укажите свой позывной в разделе «Оператор»') : I18n.t('Позывной корреспондента ещё неизвестен — впишите его вместо «?»'), 3500);
     } else send({ t: 'cw_send', text: t });
   };
   function sendText() {
@@ -1268,7 +1391,7 @@ const cwDesk = (() => {
   }
   // ---- автоответ и оператор
   $('#cwAuto').onchange = e => {
-    if (e.target.checked && !(st.op.my_call)) { e.target.checked = false; toast('Сначала укажите свой позывной в разделе «Оператор»', 3000); return; }
+    if (e.target.checked && !(st.op.my_call)) { e.target.checked = false; toast(I18n.t('Сначала укажите свой позывной в разделе «Оператор»'), 3000); return; }
     send({ t: 'cw_auto', on: e.target.checked });
     if (e.target.checked && !st.dec) toggle(true);
   };
@@ -1288,37 +1411,39 @@ const cwDesk = (() => {
   // ---- сообщения сервера
   function on(m) {
     switch (m.t) {
+      case 'language': I18n.sync(m.language); break;
+      case 'language_error': $('#language').value = m.language; toast(m.msg, 5000); break;
       case 'cw_state':
         st.freq = m.dec.freq || 0;
         renderOp(m.op, m.auto_delay, m.auto_max);
         scr.innerHTML = ''; cur = null;
         for (const h of m.history) line(h.dir === 'tx' ? 'tx-line' : 'rx-over', h.clean && h.dir === 'rx' ? h.text : h.text);
         if (m.over) curLine().textContent = m.over;
-        if (!m.history.length && !m.over) scr.innerHTML = '<span class="muted" id="cwHint">Включите декодер и настройтесь на телеграфную станцию: двойной клик по сигналу на водопаде (в режиме CW). Правый клик по сигналу — декодер будет слушать именно его.</span>';
+        if (!m.history.length && !m.over) scr.innerHTML = I18n.t('<span class="muted" id="cwHint">Включите декодер и настройтесь на телеграфную станцию: двойной клик по сигналу на водопаде (в режиме CW). Правый клик по сигналу — декодер будет слушать именно его.</span>');
         renderAnalysis(m.analysis); showProposal(m.proposal);
         if (m.busy_tx && m.tx_text) { st.txText = m.tx_text; $('#cwTxLine').classList.remove('hidden'); txProgress(0); }
         $('#cwAuto').checked = false;
-        aiStatus(`LM Studio: ${m.ai_url}${m.ai_model ? ' · ' + m.ai_model : ''} — проверяю…`);
+        aiStatus(I18n.t`LM Studio: ${m.ai_url}${m.ai_model ? ' · ' + m.ai_model : ''} — проверяю…`);
         send({ t: 'cw_ai_test' });
         renderDec();
         break;
       case 'cw_rx': addRx(m.text); break;
       case 'cw_info': {
-        $('#cwInfo').innerHTML = `<span class="sig ${m.sig ? 'on' : ''}"></span>${m.wpm ? m.wpm + ' WPM · ' : ''}${m.freq} Гц${m.auto ? ' (авто)' : ''} · ${m.snr} дБ`;
+        $('#cwInfo').innerHTML = I18n.t`<span class="sig ${m.sig ? 'on' : ''}"></span>${m.wpm ? m.wpm + ' WPM · ' : ''}${m.freq} Гц${m.auto ? I18n.t(' (авто)') : ''} · ${m.snr} дБ`;
         if (C.cwMark !== m.freq) { C.cwMark = m.freq; drawOverlay(); }
         break;
       }
       case 'cw_over': closeOver(m.item); break;
       case 'cw_clear': if (cur) { cur.remove(); cur = null; } break;
-      case 'cw_new': scr.innerHTML = ''; cur = null; renderAnalysis(null); st.lastCall = ''; toast('Новая связь'); break;
+      case 'cw_new': scr.innerHTML = ''; cur = null; renderAnalysis(null); st.lastCall = ''; toast(I18n.t('Новая связь')); break;
       case 'cw_dec': break;
-      case 'cw_ai_busy': aiStatus(m.on ? m.what : (st.aiOk ? 'LM Studio: готов' : 'LM Studio'), false); $('#cwAiStatus').classList.toggle('cw-busy', m.on); break;
-      case 'cw_ai': renderAnalysis(m.a); aiStatus(m.a.note ? m.a.note : (m.a.model === 'правила (без ИИ)' ? 'Разбор по правилам (ИИ выключен)' : 'LM Studio: готов · ' + (m.a.model || '')), !!m.a.note); break;
-      case 'cw_ai_err': aiStatus('ИИ недоступен — работаю по правилам', true); toast(m.msg, 6000); break;
+      case 'cw_ai_busy': aiStatus(m.on ? m.what : (st.aiOk ? I18n.t('LM Studio: готов') : 'LM Studio'), false); $('#cwAiStatus').classList.toggle('cw-busy', m.on); break;
+      case 'cw_ai': renderAnalysis(m.a); aiStatus(m.a.note ? m.a.note : (m.a.model === I18n.t('правила (без ИИ)') ? I18n.t('Разбор по правилам (ИИ выключен)') : I18n.t('LM Studio: готов · ') + (m.a.model || '')), !!m.a.note); break;
+      case 'cw_ai_err': aiStatus(I18n.t('ИИ недоступен — работаю по правилам'), true); toast(m.msg, 6000); break;
       case 'cw_ai_test':
         st.aiOk = m.ok;
-        aiStatus(m.ok ? `LM Studio: готов · ${m.model || m.models[0] || 'модель не загружена'}` : m.msg, !m.ok);
-        if (m.ok && !m.models.length) aiStatus('LM Studio работает, но модель не загружена — загрузите её в LM Studio', true);
+        aiStatus(m.ok ? I18n.t`LM Studio: готов · ${m.model || m.models[0] || I18n.t('модель не загружена')}` : m.msg, !m.ok);
+        if (m.ok && !m.models.length) aiStatus(I18n.t('LM Studio работает, но модель не загружена — загрузите её в LM Studio'), true);
         break;
       case 'cw_proposal': showProposal(m.p); break;
       case 'cw_tx_start': txStart(m.item); break;
@@ -1326,7 +1451,7 @@ const cwDesk = (() => {
       case 'cw_tx_done':
         txProgress(st.txText.length);
         setTimeout(() => $('#cwTxLine').classList.add('hidden'), 1200);
-        if (m.msg) toast(m.msg, 5000); else if (!m.ok) toast('Передача CW остановлена');
+        if (m.msg) toast(m.msg, 5000); else if (!m.ok) toast(I18n.t('Передача CW остановлена'));
         break;
       case 'cw_auto': if (!m.on) $('#cwAuto').checked = false; break;
       case 'cw_op': renderOp(m.op, m.auto_delay, m.auto_max); break;
@@ -1343,28 +1468,28 @@ const digiDesk = (() => {
     rows: [], W: 1809, fxState: 'idle', txText: '', slant: 0, fxC: 1900, fxD: 400 };
   const scr = $('#rtScreen'), cv = $('#fxCanvas'), wrap = $('#fxWrap');
   const RT_PRESETS = [
-    ['', '— выбрать —'],
-    ['ham', 'Любители 45,45 Бод / 170 Гц', { baud: 45.45, shift: 170 }],
-    ['dwd1', 'DWD метео 4583 кГц (50/450)', { baud: 50, shift: 450, f: 4583000 }],
-    ['dwd2', 'DWD метео 7646 кГц (50/450)', { baud: 50, shift: 450, f: 7646000 }],
-    ['dwd3', 'DWD метео 10100,8 кГц (50/450)', { baud: 50, shift: 450, f: 10100800 }],
-    ['dwd4', 'DWD метео 11039 кГц (50/450)', { baud: 50, shift: 450, f: 11039000 }],
-    ['dwd5', 'DWD метео 14467,3 кГц (50/450)', { baud: 50, shift: 450, f: 14467300 }],
-    ['dwdlf', 'DWD метео 147,3 кГц ДВ (50/85)', { baud: 50, shift: 85, f: 147300 }],
-    ['h80', 'Любители 80 м — 3590 кГц', { baud: 45.45, shift: 170, f: 3590000, lsb: true }],
-    ['h40', 'Любители 40 м — 7043 кГц', { baud: 45.45, shift: 170, f: 7043000, lsb: true }],
-    ['h20', 'Любители 20 м — 14085 кГц', { baud: 45.45, shift: 170, f: 14085000, lsb: true }],
-    ['h15', 'Любители 15 м — 21085 кГц', { baud: 45.45, shift: 170, f: 21085000, lsb: true }],
+    ['', I18n.t('— выбрать —')],
+    ['ham', I18n.t('Любители 45,45 Бод / 170 Гц'), { baud: 45.45, shift: 170 }],
+    ['dwd1', I18n.t('DWD метео 4583 кГц (50/450)'), { baud: 50, shift: 450, f: 4583000 }],
+    ['dwd2', I18n.t('DWD метео 7646 кГц (50/450)'), { baud: 50, shift: 450, f: 7646000 }],
+    ['dwd3', I18n.t('DWD метео 10100,8 кГц (50/450)'), { baud: 50, shift: 450, f: 10100800 }],
+    ['dwd4', I18n.t('DWD метео 11039 кГц (50/450)'), { baud: 50, shift: 450, f: 11039000 }],
+    ['dwd5', I18n.t('DWD метео 14467,3 кГц (50/450)'), { baud: 50, shift: 450, f: 14467300 }],
+    ['dwdlf', I18n.t('DWD метео 147,3 кГц ДВ (50/85)'), { baud: 50, shift: 85, f: 147300 }],
+    ['h80', I18n.t('Любители 80 м — 3590 кГц'), { baud: 45.45, shift: 170, f: 3590000, lsb: true }],
+    ['h40', I18n.t('Любители 40 м — 7043 кГц'), { baud: 45.45, shift: 170, f: 7043000, lsb: true }],
+    ['h20', I18n.t('Любители 20 м — 14085 кГц'), { baud: 45.45, shift: 170, f: 14085000, lsb: true }],
+    ['h15', I18n.t('Любители 15 м — 21085 кГц'), { baud: 45.45, shift: 170, f: 21085000, lsb: true }],
   ];
   const FX_PRESETS = [
-    ['', '— выбрать —'],
-    ['d1', 'DWD Пиннеберг 3855 кГц', 3855000], ['d2', 'DWD Пиннеберг 7880 кГц', 7880000],
-    ['d3', 'DWD Пиннеберг 13882,5 кГц', 13882500],
-    ['g1', 'Northwood GYA (Англия) 2618,5 кГц — ночью', 2618500], ['g2', 'Northwood GYA 4610 кГц', 4610000],
-    ['g3', 'Northwood GYA 8040 кГц', 8040000], ['g4', 'Northwood GYA 11086,5 кГц — днём', 11086500],
-    ['a1', 'Афины SVJ4 4481 кГц (утро)', 4481000], ['a2', 'Афины SVJ4 8105 кГц (утро)', 8105000],
-    ['m1', 'Мурманск RKS-72 6328,5 кГц', 6328500], ['m2', 'Мурманск RGS-47 8444 кГц', 8444000],
-    ['p1', 'С.-Петербург UGC 4212 кГц', 4212000],
+    ['', I18n.t('— выбрать —')],
+    ['d1', I18n.t('DWD Пиннеберг 3855 кГц'), 3855000], ['d2', I18n.t('DWD Пиннеберг 7880 кГц'), 7880000],
+    ['d3', I18n.t('DWD Пиннеберг 13882,5 кГц'), 13882500],
+    ['g1', I18n.t('Northwood GYA (Англия) 2618,5 кГц — ночью'), 2618500], ['g2', I18n.t('Northwood GYA 4610 кГц'), 4610000],
+    ['g3', I18n.t('Northwood GYA 8040 кГц'), 8040000], ['g4', I18n.t('Northwood GYA 11086,5 кГц — днём'), 11086500],
+    ['a1', I18n.t('Афины SVJ4 4481 кГц (утро)'), 4481000], ['a2', I18n.t('Афины SVJ4 8105 кГц (утро)'), 8105000],
+    ['m1', I18n.t('Мурманск RKS-72 6328,5 кГц'), 6328500], ['m2', I18n.t('Мурманск RGS-47 8444 кГц'), 8444000],
+    ['p1', I18n.t('С.-Петербург UGC 4212 кГц'), 4212000],
   ];
   const fill = (sel, list) => { sel.innerHTML = list.map(p => `<option value="${p[0]}">${p[1]}</option>`).join(''); };
   fill($('#rtPreset'), RT_PRESETS); fill($('#fxPreset'), FX_PRESETS);
@@ -1397,7 +1522,7 @@ const digiDesk = (() => {
   }
   function renderRt() {
     $('#rtDecBtn').classList.toggle('on', st.rt);
-    $('#rtDecBtn').textContent = st.rt ? '● Декодер вкл' : '○ Декодер выкл';
+    $('#rtDecBtn').textContent = st.rt ? I18n.t('● Декодер вкл') : I18n.t('○ Декодер выкл');
   }
   $('#rtDecBtn').onclick = () => { st.rt = !st.rt; store.set('rtOn', st.rt); renderRt(); sendRt(); marks(); };
   ['#rtBaud', '#rtShift', '#rtFc', '#rtPol', '#rtUsos'].forEach(id => $(id).onchange = () => {
@@ -1407,7 +1532,7 @@ const digiDesk = (() => {
   const saved = store.get('rtCfg', null);
   if (saved) { $('#rtBaud').value = saved.baud; $('#rtShift').value = saved.shift; $('#rtFc').value = saved.fc; $('#rtPol').value = saved.pol; }
   st.fc = +$('#rtFc').value; st.shift = +$('#rtShift').value;
-  $('#rtTune').onclick = () => { if (!st.rt) { st.rt = true; renderRt(); sendRt(); setTimeout(() => send({ t: 'rt_autotune' }), 2500); toast('Слушаю 2 с…'); } else send({ t: 'rt_autotune' }); };
+  $('#rtTune').onclick = () => { if (!st.rt) { st.rt = true; renderRt(); sendRt(); setTimeout(() => send({ t: 'rt_autotune' }), 2500); toast(I18n.t('Слушаю 2 с…')); } else send({ t: 'rt_autotune' }); };
   $('#rtClear').onclick = () => { scr.textContent = ''; };
   $('#rtPreset').onchange = e => {
     const p = RT_PRESETS.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
@@ -1415,11 +1540,11 @@ const digiDesk = (() => {
     st.shift = p[2].shift; st.fc = +$('#rtFc').value;
     if (p[2].f && p[2].lsb) {                       // любительский RTTY — по традиции в LSB, «частота» = mark
       setParam('mode', 'LSB'); setFreq(p[2].f + 2125);
-      toast(`LSB ${((p[2].f + 2125) / 1000).toFixed(3)} кГц: mark 2125, space 2295 Гц. Правый клик по сигналу — подстроить.`, 6000);
+      toast(I18n.t`LSB ${((p[2].f + 2125) / 1000).toFixed(3)} кГц: mark 2125, space 2295 Гц. Правый клик по сигналу — подстроить.`, 6000);
       $('#rtFc').value = 2210; st.fc = 2210;
     } else if (p[2].f) {                            // частота станции — середина между тонами; ставим её на центр декодера
       setParam('mode', 'USB'); setFreq(Math.round((p[2].f - st.fc) / 10) * 10);
-      toast(`USB, ${(p[2].f / 1000).toFixed(1)} кГц на центре ${st.fc} Гц. Расписание станций меняется — сверяйтесь со свежим.`, 6000);
+      toast(I18n.t`USB, ${(p[2].f / 1000).toFixed(1)} кГц на центре ${st.fc} Гц. Расписание станций меняется — сверяйтесь со свежим.`, 6000);
     }
     if (!st.rt) { st.rt = true; renderRt(); }
     sendRt(); marks(); e.target.value = '';
@@ -1432,8 +1557,8 @@ const digiDesk = (() => {
     if (end) scr.scrollTop = scr.scrollHeight;
   }
   $('#rtAiBtn').onclick = () => {
-    const t = scr.textContent.trim(); if (!t) return toast('Пока нечего переводить');
-    $('#rtAi').classList.remove('hidden'); $('#rtAiBody').textContent = 'Перевожу…'; $('#rtAiModel').textContent = '';
+    const t = scr.textContent.trim(); if (!t) return toast(I18n.t('Пока нечего переводить'));
+    $('#rtAi').classList.remove('hidden'); $('#rtAiBody').textContent = I18n.t('Перевожу…'); $('#rtAiModel').textContent = '';
     send({ t: 'rt_ai', text: t.slice(-3000) });
   };
   $('#rtAiClose').onclick = () => $('#rtAi').classList.add('hidden');
@@ -1444,7 +1569,7 @@ const digiDesk = (() => {
   $('#rtMacros').innerHTML = RT_MACROS.map((m, i) => `<button class="btn" data-i="${i}">${m[0]}</button>`).join('');
   $$('#rtMacros button').forEach(b => b.onclick = () => {
     const t = RT_MACROS[+b.dataset.i][1];
-    if (t.includes('{MY}') && !myCall()) { toast('Укажите свой позывной на вкладке CW · Морзе'); return; }
+    if (t.includes('{MY}') && !myCall()) { toast(I18n.t('Укажите свой позывной на вкладке CW · Морзе')); return; }
     rtSend(t);
   });
   function rtSend(t) {
@@ -1504,7 +1629,7 @@ const digiDesk = (() => {
   }
   function renderFx() {
     $('#fxDecBtn').classList.toggle('on', st.fx);
-    $('#fxDecBtn').textContent = st.fx ? '● Приём вкл' : '○ Приём выкл';
+    $('#fxDecBtn').textContent = st.fx ? I18n.t('● Приём вкл') : I18n.t('○ Приём выкл');
   }
   $('#fxDecBtn').onclick = () => { st.fx = !st.fx; store.set('fxOn', st.fx); renderFx(); sendFx(); marks(); };
   ['#fxLpm', '#fxIoc', '#fxAuto', '#fxAfc'].forEach(id => $(id).onchange = () => sendFx());
@@ -1519,7 +1644,7 @@ const digiDesk = (() => {
     $('#fxLpm').value = '120'; $('#fxIoc').value = '576';
     if (!st.fx) { st.fx = true; renderFx(); }
     sendFx(); marks();
-    toast(`USB ${((p[2] - 1900) / 1000).toFixed(1)} кГц (на 1,9 кГц ниже ${(p[2] / 1000).toFixed(1)}). Ждём тон старта — карты идут по расписанию DWD.`, 6000);
+    toast(I18n.t`USB ${((p[2] - 1900) / 1000).toFixed(1)} кГц (на 1,9 кГц ниже ${(p[2] / 1000).toFixed(1)}). Ждём тон старта — карты идут по расписанию DWD.`, 6000);
     e.target.value = '';
   };
   cv.addEventListener('click', e => {               // клик — здесь левый край карты
@@ -1527,10 +1652,10 @@ const digiDesk = (() => {
     if (!st.rows.length) return;
     send({ t: 'fax_shift', px });
     st.rows = st.rows.map(row => { const o = new Uint8Array(row.length); o.set(row.subarray(px)); o.set(row.subarray(0, px), row.length - px); return o; });
-    redraw(); toast('Край карты сдвинут');
+    redraw(); toast(I18n.t('Край карты сдвинут'));
   });
   $('#fxPng').onclick = () => {
-    if (!st.rows.length) return toast('Картинки пока нет');
+    if (!st.rows.length) return toast(I18n.t('Картинки пока нет'));
     const a = document.createElement('a');
     const d = new Date(), z = n => String(n).padStart(2, '0');
     a.download = `fax_${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}.png`;
@@ -1541,18 +1666,20 @@ const digiDesk = (() => {
   $('#fxBig').onclick = () => { wrap.classList.toggle('big'); };
   $('#fxClose').onclick = () => wrap.classList.remove('big');
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && wrap.classList.contains('big')) wrap.classList.remove('big'); });
-  const FX_ST = { idle: 'ждёт тон старта', phasing: 'фазирование…', image: 'приём карты' };
+  const FX_ST = { idle: I18n.t('ждёт тон старта'), phasing: I18n.t('фазирование…'), image: I18n.t('приём карты') };
 
   // ================= сообщения
   function on(m) {
     switch (m.t) {
+      case 'language': I18n.sync(m.language); break;
+      case 'language_error': $('#language').value = m.language; toast(m.msg, 5000); break;
       case 'rt_state':
         st.fc = m.fc; st.shift = m.shift; st.baud = m.baud;
         $('#rtFc').value = m.fc; $('#rtShift').value = String(m.shift); $('#rtBaud').value = String(m.baud);
         marks(); break;
       case 'rt_rx': addText(m.text); break;
       case 'rt_info':
-        $('#rtInfo').textContent = `${m.fc} Гц · ${m.shift}/${m.baud} · ${m.pol} · ошибок ${m.err}%`;
+        $('#rtInfo').textContent = I18n.t`${m.fc} Гц · ${m.shift}/${m.baud} · ${m.pol} · ошибок ${m.err}%`;
         if (m.fc !== st.fc) { st.fc = m.fc; marks(); }
         break;
       case 'rt_note': toast(m.msg, 5000); break;
@@ -1564,7 +1691,7 @@ const digiDesk = (() => {
         txProgress(st.txText.length); setTimeout(() => $('#rtTxLine').classList.add('hidden'), 1200);
         if (m.msg) toast(m.msg, 6000); break;
       case 'rt_ai': $('#rtAiBody').textContent = m.ru; $('#rtAiModel').textContent = m.model || ''; break;
-      case 'rt_ai_err': $('#rtAi').classList.remove('hidden'); $('#rtAiBody').textContent = 'Перевод недоступен: ' + m.msg + ' Приём и передача RTTY работают и без ИИ.'; break;
+      case 'rt_ai_err': $('#rtAi').classList.remove('hidden'); $('#rtAiBody').textContent = I18n.t('Перевод недоступен: ') + m.msg + I18n.t(' Приём и передача RTTY работают и без ИИ.'); break;
       case 'fax_state':
         if (m.state === 'phasing' || (m.state === 'image' && !m.rows && st.fxState !== 'image')) { st.rows = []; redraw(); }
         st.fxState = m.state; if (m.W) st.W = m.W;
@@ -1572,12 +1699,12 @@ const digiDesk = (() => {
         if (m.lpm) $('#fxLpm').value = String(m.lpm);
         if (m.center) { st.fxC = m.center; st.fxD = m.dev || 400; $('#fxCenter').value = m.center; $('#fxAfc').checked = m.afc !== false; marks(); }
         if (m.ioc) $('#fxIoc').value = String(m.ioc);
-        if (m.saved && m.saved.length) $('#fxSaved').textContent = 'Сохранено на сервере (папка fax): ' + m.saved.slice(-4).join(', ');
-        $('#fxInfo').textContent = (FX_ST[m.state] || m.state) + (m.rows ? ` · ${m.rows} строк` : '');
+        if (m.saved && m.saved.length) $('#fxSaved').textContent = I18n.t('Сохранено на сервере (папка fax): ') + m.saved.slice(-4).join(', ');
+        $('#fxInfo').textContent = (FX_ST[m.state] || m.state) + (m.rows ? I18n.t` · ${m.rows} строк` : '');
         break;
       case 'fax_info': {
-        const sig = m.q === undefined ? '' : m.q >= 0.9 ? ` · сигнал ✓ ${m.lo}–${m.hi} Гц` : ' · сигнала факса нет (шум)';
-        $('#fxInfo').textContent = (FX_ST[m.state] || m.state) + (m.rows ? ` · ${m.rows} строк` : '') + sig;
+        const sig = m.q === undefined ? '' : m.q >= 0.9 ? I18n.t` · сигнал ✓ ${m.lo}–${m.hi} Гц` : I18n.t(' · сигнала факса нет (шум)');
+        $('#fxInfo').textContent = (FX_ST[m.state] || m.state) + (m.rows ? I18n.t` · ${m.rows} строк` : '') + sig;
         $('#fxSlant').textContent = m.slant;
         if (m.center && (m.center !== st.fxC || m.dev !== st.fxD)) {
           st.fxC = m.center; st.fxD = m.dev || 400;
@@ -1586,8 +1713,8 @@ const digiDesk = (() => {
         }
         break;
       }
-      case 'fax_note': toast('Факс: ' + m.msg, 4500); break;
-      case 'fax_saved': toast('Факс сохранён: ' + m.path, 6000); break;
+      case 'fax_note': toast(I18n.t('Факс: ') + m.msg, 4500); break;
+      case 'fax_saved': toast(I18n.t('Факс сохранён: ') + m.path, 6000); break;
     }
   }
   function onBin(b) {
@@ -1601,8 +1728,8 @@ const digiDesk = (() => {
   }
   function pickAudio(hz) {                       // правый клик по водопаду на этой вкладке
     if (st.sub === 'nx' || st.sub === 'psk' || st.sub === 'sstv') return digi2.pick(st.sub, hz);
-    if (st.sub === 'rtty') { $('#rtFc').value = Math.round(hz); st.fc = Math.round(hz); if (!st.rt) { st.rt = true; renderRt(); } sendRt(); marks(); toast(`RTTY: центр ${st.fc} Гц`); }
-    else { $('#fxCenter').value = Math.round(hz); st.fxC = Math.round(hz); st.fxD = 400; sendFx(st.fxC); marks(); toast(`Факс: центр ${st.fxC} Гц (чёрный ${st.fxC - 400}, белый ${st.fxC + 400})`); }
+    if (st.sub === 'rtty') { $('#rtFc').value = Math.round(hz); st.fc = Math.round(hz); if (!st.rt) { st.rt = true; renderRt(); } sendRt(); marks(); toast(I18n.t`RTTY: центр ${st.fc} Гц`); }
+    else { $('#fxCenter').value = Math.round(hz); st.fxC = Math.round(hz); st.fxD = 400; sendFx(st.fxC); marks(); toast(I18n.t`Факс: центр ${st.fxC} Гц (чёрный ${st.fxC - 400}, белый ${st.fxC + 400})`); }
   }
   function resend() {
     st.rt = store.get('rtOn', false); st.fx = store.get('fxOn', false);
@@ -1623,94 +1750,94 @@ const HOTKEYS = (() => {
   const MODE_CYCLE = ['LSB', 'USB', 'CW-U', 'CW-L', 'AM', 'FM', 'DATA-U', 'DATA-L'];
   const SPANS = [0, 3000, 4000, 6000, 8000, 12000, 24000];
   const note = m => toast(m, 1300);
-  const onOff = v => v ? 'вкл' : 'выкл';
+  const onOff = v => v ? I18n.t('вкл') : I18n.t('выкл');
   const toggle = (k, name) => { const v = S[k] ? 0 : 1; setParam(k, v); renderControls({ [k]: v }); renderBadges(); note(`${name}: ${onOff(v)}`); };
-  const setMode = m => { setParam('mode', m); renderBadges(); note('Вид работы: ' + m); setTimeout(rememberBand, 300); };
+  const setMode = m => { setParam('mode', m); renderBadges(); note(I18n.t('Вид работы: ') + m); setTimeout(rememberBand, 300); };
   const bandIdx = () => { const f = S.freq_a || 0; const i = BANDS.findIndex(b => f >= b[1] && f <= b[2]); return i; };
   const goBand = d => {
     let i = bandIdx();
     if (i < 0) { const f = S.freq_a || 0; i = d > 0 ? BANDS.findIndex(b => b[1] > f) : BANDS.map(b => b[2] < f).lastIndexOf(true); if (i < 0) return; }
     else i = (i + d + BANDS.length) % BANDS.length;
-    $$('#bands .btn')[i].click(); note('Диапазон ' + $$('#bands .btn')[i].textContent);
+    $$('#bands .btn')[i].click(); note(I18n.t('Диапазон ') + $$('#bands .btn')[i].textContent);
   };
   const lvlToggle = (k, name) => {
     const cur = S[k] | 0;
-    if (cur) { opts[k + 'Last'] = cur; saveOpts(); setParam(k, 0); note(name + ': выкл'); }
+    if (cur) { opts[k + 'Last'] = cur; saveOpts(); setParam(k, 0); note(name + I18n.t(': выкл')); }
     else { const v = opts[k + 'Last'] || 5; setParam(k, v); note(`${name}: ${v}`); }
     renderControls({ [k]: S[k] });
   };
   const A = [
     // id, группа, название, клавиши по умолчанию, действие, [отпускание], [повтор при удержании]
-    ['ptt', 'Передача', 'PTT — передача (держать)', ['Space'],
+    ['ptt', I18n.t('Передача'), I18n.t('PTT — передача (держать)'), ['Space'],
       () => { opts.pttMode === 'toggle' ? (C.pttPressed ? pttUp() : pttDown()) : pttDown(); },
       () => { if (opts.pttMode === 'hold') pttUp(); }],
-    ['stop', 'Передача', 'Стоп: снять передачу, остановить тюнер и передачу CW, отменить автоответ', ['Escape'],
+    ['stop', I18n.t('Передача'), I18n.t('Стоп: снять передачу, остановить тюнер и передачу CW, отменить автоответ'), ['Escape'],
       () => { pttUp(); if (S.tuning) act('tune_stop'); cwDesk.stop(); digiDesk.stop(); digi2.stop(); voiceCq.stop(); }],
-    ['tuner', 'Передача', 'Тюнер: настроить', ['KeyT'], () => { act('tune'); note('Тюнер: настройка'); }],
-    ['proc', 'Передача', 'Компрессор PROC', [], () => toggle('proc', 'PROC')],
-    ['vox', 'Передача', 'VOX', [], () => toggle('vox', 'VOX')],
-    ['up', 'Частота', 'Вверх на шаг', ['ArrowUp', 'ArrowRight'], () => nudge(1), null, true],
-    ['down', 'Частота', 'Вниз на шаг', ['ArrowDown', 'ArrowLeft'], () => nudge(-1), null, true],
-    ['up10', 'Частота', 'Вверх на 10 шагов', ['PageUp', 'Shift+ArrowUp', 'Shift+ArrowRight'], () => nudge(10), null, true],
-    ['down10', 'Частота', 'Вниз на 10 шагов', ['PageDown', 'Shift+ArrowDown', 'Shift+ArrowLeft'], () => nudge(-10), null, true],
-    ['step+', 'Частота', 'Шаг крупнее', ['KeyS'], () => stepMove(1)],
-    ['step-', 'Частота', 'Шаг мельче', ['Shift+KeyS'], () => stepMove(-1)],
-    ['entry', 'Частота', 'Ввод частоты с клавиатуры', ['Enter', 'NumpadEnter'], () => { const i = $('#freqInput'); i.focus(); i.select(); }],
-    ['band+', 'Частота', 'Следующий диапазон', ['BracketRight'], () => goBand(1)],
-    ['band-', 'Частота', 'Предыдущий диапазон', ['BracketLeft'], () => goBand(-1)],
-    ['lock', 'Частота', 'Блокировка LOCK', ['KeyK'], () => toggle('lock', 'LOCK')],
-    ['mode+', 'Вид работы', 'Следующий вид работы', ['KeyM'], () => { const i = MODE_CYCLE.indexOf(S.mode); setMode(MODE_CYCLE[(i + 1) % MODE_CYCLE.length]); }],
-    ['mode-', 'Вид работы', 'Предыдущий вид работы', ['Shift+KeyM'], () => { const i = MODE_CYCLE.indexOf(S.mode); setMode(MODE_CYCLE[(i - 1 + MODE_CYCLE.length) % MODE_CYCLE.length]); }],
-    ['usb', 'Вид работы', 'USB', ['KeyU'], () => setMode('USB')],
-    ['lsb', 'Вид работы', 'LSB', ['KeyL'], () => setMode('LSB')],
-    ['cw', 'Вид работы', 'CW (повторно — CW-U ⇄ CW-L)', ['KeyC'], () => setMode(S.mode === 'CW-U' ? 'CW-L' : 'CW-U')],
-    ['am', 'Вид работы', 'AM', ['KeyA'], () => setMode('AM')],
-    ['fm', 'Вид работы', 'FM (повторно — FM ⇄ FM-N)', ['KeyF'], () => setMode(S.mode === 'FM' ? 'FM-N' : 'FM')],
-    ['data', 'Вид работы', 'DATA (повторно — DATA-U ⇄ DATA-L)', ['KeyD'], () => setMode(S.mode === 'DATA-U' ? 'DATA-L' : 'DATA-U')],
+    ['tuner', I18n.t('Передача'), I18n.t('Тюнер: настроить'), ['KeyT'], () => { act('tune'); note(I18n.t('Тюнер: настройка')); }],
+    ['proc', I18n.t('Передача'), I18n.t('Компрессор PROC'), [], () => toggle('proc', 'PROC')],
+    ['vox', I18n.t('Передача'), 'VOX', [], () => toggle('vox', 'VOX')],
+    ['up', I18n.t('Частота'), I18n.t('Вверх на шаг'), ['ArrowUp', 'ArrowRight'], () => nudge(1), null, true],
+    ['down', I18n.t('Частота'), I18n.t('Вниз на шаг'), ['ArrowDown', 'ArrowLeft'], () => nudge(-1), null, true],
+    ['up10', I18n.t('Частота'), I18n.t('Вверх на 10 шагов'), ['PageUp', 'Shift+ArrowUp', 'Shift+ArrowRight'], () => nudge(10), null, true],
+    ['down10', I18n.t('Частота'), I18n.t('Вниз на 10 шагов'), ['PageDown', 'Shift+ArrowDown', 'Shift+ArrowLeft'], () => nudge(-10), null, true],
+    ['step+', I18n.t('Частота'), I18n.t('Шаг крупнее'), ['KeyS'], () => stepMove(1)],
+    ['step-', I18n.t('Частота'), I18n.t('Шаг мельче'), ['Shift+KeyS'], () => stepMove(-1)],
+    ['entry', I18n.t('Частота'), I18n.t('Ввод частоты с клавиатуры'), ['Enter', 'NumpadEnter'], () => { const i = $('#freqInput'); i.focus(); i.select(); }],
+    ['band+', I18n.t('Частота'), I18n.t('Следующий диапазон'), ['BracketRight'], () => goBand(1)],
+    ['band-', I18n.t('Частота'), I18n.t('Предыдущий диапазон'), ['BracketLeft'], () => goBand(-1)],
+    ['lock', I18n.t('Частота'), I18n.t('Блокировка LOCK'), ['KeyK'], () => toggle('lock', 'LOCK')],
+    ['mode+', I18n.t('Вид работы'), I18n.t('Следующий вид работы'), ['KeyM'], () => { const i = MODE_CYCLE.indexOf(S.mode); setMode(MODE_CYCLE[(i + 1) % MODE_CYCLE.length]); }],
+    ['mode-', I18n.t('Вид работы'), I18n.t('Предыдущий вид работы'), ['Shift+KeyM'], () => { const i = MODE_CYCLE.indexOf(S.mode); setMode(MODE_CYCLE[(i - 1 + MODE_CYCLE.length) % MODE_CYCLE.length]); }],
+    ['usb', I18n.t('Вид работы'), 'USB', ['KeyU'], () => setMode('USB')],
+    ['lsb', I18n.t('Вид работы'), 'LSB', ['KeyL'], () => setMode('LSB')],
+    ['cw', I18n.t('Вид работы'), I18n.t('CW (повторно — CW-U ⇄ CW-L)'), ['KeyC'], () => setMode(S.mode === 'CW-U' ? 'CW-L' : 'CW-U')],
+    ['am', I18n.t('Вид работы'), 'AM', ['KeyA'], () => setMode('AM')],
+    ['fm', I18n.t('Вид работы'), I18n.t('FM (повторно — FM ⇄ FM-N)'), ['KeyF'], () => setMode(S.mode === 'FM' ? 'FM-N' : 'FM')],
+    ['data', I18n.t('Вид работы'), I18n.t('DATA (повторно — DATA-U ⇄ DATA-L)'), ['KeyD'], () => setMode(S.mode === 'DATA-U' ? 'DATA-L' : 'DATA-U')],
     ['swap', 'VFO', 'A ⇄ B', ['KeyV'], () => { act('swap'); note('A ⇄ B'); }],
     ['a2b', 'VFO', 'A → B', ['KeyB'], () => { act('a_to_b'); note('A → B'); }],
     ['split', 'VFO', 'SPLIT', ['KeyX'], () => toggle('split', 'SPLIT')],
-    ['nb', 'Приёмник', 'Подавитель импульсных помех NB', ['KeyN'], () => lvlToggle('nb', 'NB')],
-    ['nr', 'Приёмник', 'Шумоподавление DNR', ['KeyR'], () => lvlToggle('nr', 'DNR')],
-    ['dnf', 'Приёмник', 'Авто-режектор DNF', ['KeyJ'], () => toggle('dnf', 'DNF')],
-    ['att', 'Приёмник', 'Аттенюатор ATT', ['KeyO'], () => toggle('att', 'ATT')],
-    ['preamp', 'Приёмник', 'Предусилитель IPO → AMP1 → AMP2', ['KeyP'], () => {
+    ['nb', I18n.t('Приёмник'), I18n.t('Подавитель импульсных помех NB'), ['KeyN'], () => lvlToggle('nb', 'NB')],
+    ['nr', I18n.t('Приёмник'), I18n.t('Шумоподавление DNR'), ['KeyR'], () => lvlToggle('nr', 'DNR')],
+    ['dnf', I18n.t('Приёмник'), I18n.t('Авто-режектор DNF'), ['KeyJ'], () => toggle('dnf', 'DNF')],
+    ['att', I18n.t('Приёмник'), I18n.t('Аттенюатор ATT'), ['KeyO'], () => toggle('att', 'ATT')],
+    ['preamp', I18n.t('Приёмник'), I18n.t('Предусилитель IPO → AMP1 → AMP2'), ['KeyP'], () => {
       const max = bandType() ? 1 : 2, v = ((ctlValue('preamp') | 0) + 1) % (max + 1);
       setParam('preamp', v); S['preamp' + bandType()] = v; renderControls({ preamp: v });
-      note('Предусилитель: ' + (bandType() ? onOff(v) : ['IPO', 'AMP1', 'AMP2'][v]));
+      note(I18n.t('Предусилитель: ') + (bandType() ? onOff(v) : ['IPO', 'AMP1', 'AMP2'][v]));
     }],
-    ['rec', 'Приёмник', 'Запись связи на ПК — старт/стоп', ['KeyH'], () => qsoRec.toggle()],
-    ['agc', 'Приёмник', 'АРУ: FAST → MID → SLOW → AUTO', ['KeyG'], () => {
-      const v = (Math.min(S.agc | 0, 4) % 4) + 1; setParam('agc', v); renderControls({ agc: v }); note('АРУ: ' + ['OFF', 'FAST', 'MID', 'SLOW', 'AUTO'][v]);
+    ['rec', I18n.t('Приёмник'), I18n.t('Запись связи на ПК — старт/стоп'), ['KeyH'], () => qsoRec.toggle()],
+    ['agc', I18n.t('Приёмник'), I18n.t('АРУ: FAST → MID → SLOW → AUTO'), ['KeyG'], () => {
+      const v = (Math.min(S.agc | 0, 4) % 4) + 1; setParam('agc', v); renderControls({ agc: v }); note(I18n.t('АРУ: ') + ['OFF', 'FAST', 'MID', 'SLOW', 'AUTO'][v]);
     }],
-    ['narrow', 'Приёмник', 'Узкий фильтр NAR', [], () => toggle('narrow', 'NAR')],
-    ['sq', 'Приёмник', 'Шумодав пульта (FM): выкл → по ТРХ → по уровню', ['KeyQ'], () => {
+    ['narrow', I18n.t('Приёмник'), I18n.t('Узкий фильтр NAR'), [], () => toggle('narrow', 'NAR')],
+    ['sq', I18n.t('Приёмник'), I18n.t('Шумодав пульта (FM): выкл → по ТРХ → по уровню'), ['KeyQ'], () => {
       const L = ['off', 'radio', 'level']; opts.sqMode = L[(L.indexOf(opts.sqMode) + 1) % 3]; saveOpts(); renderSq(); pushGate();
-      note('Шумодав: ' + { off: 'выкл', radio: 'по трансиверу', level: 'по уровню' }[opts.sqMode] + (isFMmode(S.mode) ? '' : ' (работает только в FM)'));
+      note(I18n.t('Шумодав: ') + { off: I18n.t('выкл'), radio: I18n.t('по трансиверу'), level: I18n.t('по уровню') }[opts.sqMode] + (isFMmode(S.mode) ? '' : I18n.t(' (работает только в FM)')));
     }],
-    ['audio', 'Звук и экран', 'Звук приёма вкл/выкл', ['KeyZ'], () => $('#btnAudio').click()],
-    ['vol+', 'Звук и экран', 'Громкость +', ['Equal', 'NumpadAdd'], () => volStep(10), null, true],
-    ['vol-', 'Звук и экран', 'Громкость −', ['Minus', 'NumpadSubtract'], () => volStep(-10), null, true],
-    ['span', 'Звук и экран', 'Обзор водопада: Авто → 3k → … → 24k', ['KeyW'], () => {
+    ['audio', I18n.t('Звук и экран'), I18n.t('Звук приёма вкл/выкл'), ['KeyZ'], () => $('#btnAudio').click()],
+    ['vol+', I18n.t('Звук и экран'), I18n.t('Громкость +'), ['Equal', 'NumpadAdd'], () => volStep(10), null, true],
+    ['vol-', I18n.t('Звук и экран'), I18n.t('Громкость −'), ['Minus', 'NumpadSubtract'], () => volStep(-10), null, true],
+    ['span', I18n.t('Звук и экран'), I18n.t('Обзор водопада: Авто → 3k → … → 24k'), ['KeyW'], () => {
       const i = SPANS.indexOf(C.wfMax); C.wfMax = SPANS[(i + 1) % SPANS.length]; store.set('wfMax', C.wfMax); updateSpan(true);
-      note('Обзор: ' + (C.wfMax ? C.wfMax / 1000 + ' кГц' : 'авто'));
+      note(I18n.t('Обзор: ') + (C.wfMax ? C.wfMax / 1000 + I18n.t(' кГц') : I18n.t('авто')));
     }],
-    ['full', 'Звук и экран', 'Во весь экран', [], () => $('#btnFull').click()],
-    ['help', 'Звук и экран', 'Справка по клавишам', ['Shift+Slash', 'F1'], () => showHelp()],
-    ['cwdec', 'CW', 'Декодер Морзе вкл/выкл', ['KeyE'], () => cwDesk.toggle()],
-    ['cwai', 'CW', 'ИИ: разобрать принятое', ['KeyI'], () => send({ t: 'cw_ai_analyze' })],
-    ['cwreply', 'CW', 'ИИ: составить ответ', ['KeyY'], () => send({ t: 'cw_ai_reply' })],
-    ['cwtext', 'CW', 'Перейти к тексту для передачи', ['Backquote'], () => { $('#tabs button[data-tab="cw"]').click(); $('#cwText').focus(); }],
+    ['full', I18n.t('Звук и экран'), I18n.t('Во весь экран'), [], () => $('#btnFull').click()],
+    ['help', I18n.t('Звук и экран'), I18n.t('Справка по клавишам'), ['Shift+Slash', 'F1'], () => showHelp()],
+    ['cwdec', 'CW', I18n.t('Декодер Морзе вкл/выкл'), ['KeyE'], () => cwDesk.toggle()],
+    ['cwai', 'CW', I18n.t('ИИ: разобрать принятое'), ['KeyI'], () => send({ t: 'cw_ai_analyze' })],
+    ['cwreply', 'CW', I18n.t('ИИ: составить ответ'), ['KeyY'], () => send({ t: 'cw_ai_reply' })],
+    ['cwtext', 'CW', I18n.t('Перейти к тексту для передачи'), ['Backquote'], () => { $('#tabs button[data-tab="cw"]').click(); $('#cwText').focus(); }],
   ];
-  for (let n = 1; n <= 5; n++) A.push(['cw' + n, 'CW', `Передать CW-память ${n}`, ['Shift+Digit' + n], () => { act('cw_play', n); note('CW-память ' + n); }]);
+  for (let n = 1; n <= 5; n++) A.push(['cw' + n, 'CW', I18n.t`Передать CW-память ${n}`, ['Shift+Digit' + n], () => { act('cw_play', n); note(I18n.t('CW-память ') + n); }]);
   const actions = A.map(([id, group, name, def, down, up, repeat]) => ({ id, group, name, def, down, up, repeat }));
 
   function stepMove(d) {
     const sel = $('#step'), i = clamp(sel.selectedIndex + d, 0, sel.options.length - 1);
-    sel.selectedIndex = i; sel.dispatchEvent(new Event('change')); note('Шаг: ' + sel.options[i].text);
+    sel.selectedIndex = i; sel.dispatchEvent(new Event('change')); note(I18n.t('Шаг: ') + sel.options[i].text);
   }
   function volStep(d) {
-    const v = $('#volume'); v.value = clamp(+v.value + d, 0, 200); v.dispatchEvent(new Event('input')); note('Громкость: ' + v.value + ' %');
+    const v = $('#volume'); v.value = clamp(+v.value + d, 0, 200); v.dispatchEvent(new Event('input')); note(I18n.t('Громкость: ') + v.value + ' %');
   }
 
   // --- раскладка клавиш: по умолчанию + переназначения пользователя
@@ -1720,7 +1847,7 @@ const HOTKEYS = (() => {
   function rebuild() { map = new Map(); for (const a of actions) for (const k of keysOf(a)) map.set(k, a); }
   rebuild();
   const comboOf = e => (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + (e.shiftKey ? 'Shift+' : '') + e.code;
-  const NAMES = { Space: 'Пробел', Enter: 'Enter', NumpadEnter: 'Num Enter', Escape: 'Esc', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+  const NAMES = { Space: I18n.t('Пробел'), Enter: 'Enter', NumpadEnter: 'Num Enter', Escape: 'Esc', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
     PageUp: 'PgUp', PageDown: 'PgDn', BracketLeft: '[', BracketRight: ']', Equal: '=', Minus: '−', NumpadAdd: 'Num +', NumpadSubtract: 'Num −',
     Slash: '/', Backslash: '\\', Backquote: '`', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Tab: 'Tab', Home: 'Home', End: 'End', Insert: 'Ins', Delete: 'Del' };
   function label(k) {
@@ -1765,7 +1892,7 @@ const HOTKEYS = (() => {
     const groups = [...new Set(actions.map(a => a.group))];
     return groups.map(g => `<div class="hk-group"><h4>${g}</h4>` + actions.filter(a => a.group === g && keysOf(a).length).map(a =>
       `<div class="hk-row"><span>${a.name}</span><span>${keysOf(a).map(k => `<kbd>${label(k)}</kbd>`).join(' ')}</span></div>`).join('') + '</div>').join('') +
-      `<div class="hk-group"><h4>Ещё</h4><div class="hk-row"><span>Набрать частоту: цифры, затем Enter (7.074 — МГц, 14200 — кГц)</span><span><kbd>0</kbd>…<kbd>9</kbd></span></div>
+      I18n.t`<div class="hk-group"><h4>Ещё</h4><div class="hk-row"><span>Набрать частоту: цифры, затем Enter (7.074 — МГц, 14200 — кГц)</span><span><kbd>0</kbd>…<kbd>9</kbd></span></div>
        <div class="hk-row"><span>Колесо мыши над частотой — менять разряд под курсором</span><span><kbd>🖱</kbd></span></div></div>`;
   }
   function showHelp() { $('#helpBody').innerHTML = helpHtml(); $('#help').classList.remove('hidden'); }
@@ -1778,29 +1905,29 @@ const HOTKEYS = (() => {
   function renderEditor() {
     const groups = [...new Set(actions.map(a => a.group))];
     $('#hkList').innerHTML = groups.map(g => `<h4>${g}</h4>` + actions.filter(a => a.group === g).map(a =>
-      `<div class="hk-edit" data-id="${a.id}"><span>${a.name}</span><span class="hk-keys">${keysOf(a).map(k => `<kbd>${label(k)}</kbd>`).join(' ') || '<span class="muted">—</span>'}</span>
+      I18n.t`<div class="hk-edit" data-id="${a.id}"><span>${a.name}</span><span class="hk-keys">${keysOf(a).map(k => `<kbd>${label(k)}</kbd>`).join(' ') || '<span class="muted">—</span>'}</span>
        <button class="btn small" data-act="set">Назначить</button><button class="btn small" data-act="clear" title="Убрать клавиши">×</button></div>`).join('')).join('');
-    $('#btnKeys').title = 'Горячие клавиши (?)';
-    const pk = keysOf(actions[0]); $('#ptt').title = pk.length ? 'PTT — клавиша ' + pk.map(label).join(' / ') : 'PTT';
+    $('#btnKeys').title = I18n.t('Горячие клавиши (?)');
+    const pk = keysOf(actions[0]); $('#ptt').title = pk.length ? I18n.t('PTT — клавиша ') + pk.map(label).join(' / ') : 'PTT';
   }
   $('#hkList').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     const row = b.closest('.hk-edit'), a = actions.find(x => x.id === row.dataset.id);
     if (b.dataset.act === 'clear') { custom[a.id] = []; save(); return; }
-    $('.hk-keys', row).innerHTML = '<span class="hk-wait">Нажмите клавишу… (Esc — отмена)</span>';
+    $('.hk-keys', row).innerHTML = I18n.t('<span class="hk-wait">Нажмите клавишу… (Esc — отмена)</span>');
     capture = ev => {
       if (['ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'].includes(ev.code)) return;
       capture = null;
       if (ev.code === 'Escape' && !ev.shiftKey) { renderEditor(); return; }
       const k = comboOf(ev);
       const other = actions.find(x => x !== a && keysOf(x).includes(k));
-      if (other) { custom[other.id] = keysOf(other).filter(x => x !== k); toast(`«${label(k)}» снята с действия «${other.name}»`, 3000); }
+      if (other) { custom[other.id] = keysOf(other).filter(x => x !== k); toast(I18n.t`«${label(k)}» снята с действия «${other.name}»`, 3000); }
       custom[a.id] = [k];
       save();
     };
   });
   function save() { store.set('keys', custom); rebuild(); renderEditor(); }
-  $('#hkReset').onclick = () => { custom = {}; save(); toast('Клавиши по умолчанию'); };
+  $('#hkReset').onclick = () => { custom = {}; save(); toast(I18n.t('Клавиши по умолчанию')); };
   $('#optHotkeys').checked = opts.hotkeys;
   $('#optHotkeys').onchange = e => { opts.hotkeys = e.target.checked; saveOpts(); };
   renderEditor();
@@ -1871,11 +1998,11 @@ const voiceCq = (() => {
   function render() {
     box.innerHTML = st.slots.map(s => {
       const live = st.run && st.run.slot === s.slot, rec = st.recSlot === s.slot;
-      return `<div class="vk-slot${live ? ' live' : ''}${rec ? ' rec' : ''}" data-s="${s.slot}">
+      return I18n.t`<div class="vk-slot${live ? ' live' : ''}${rec ? ' rec' : ''}" data-s="${s.slot}">
         <b class="mono">${s.slot}</b>
-        <input class="nm" value="${esc(s.name)}" placeholder="${s.dur ? '' : 'пусто — запишите или загрузите'}" maxlength="40">
-        <span class="dur mono muted">${s.dur ? s.dur.toFixed(1) + ' с' : ''}</span>
-        <button class="btn small" data-a="rec">${rec ? '■ Стоп записи' : '● Запись'}</button>
+        <input class="nm" value="${esc(s.name)}" placeholder="${s.dur ? '' : I18n.t('пусто — запишите или загрузите')}" maxlength="40">
+        <span class="dur mono muted">${s.dur ? s.dur.toFixed(1) + I18n.t(' с') : ''}</span>
+        <button class="btn small" data-a="rec">${rec ? I18n.t('■ Стоп записи') : I18n.t('● Запись')}</button>
         <button class="btn small" data-a="file" title="Загрузить звуковой файл (wav, mp3, ogg…)">📁</button>
         <button class="btn small" data-a="play" ${s.dur ? '' : 'disabled'} title="Прослушать у себя">▶</button>
         <button class="btn small primary" data-a="go" ${s.dur ? '' : 'disabled'}>📢 В эфир</button>
@@ -1888,14 +2015,14 @@ const voiceCq = (() => {
       $('.nm', row).onchange = e => { const s = st.slots.find(x => x.slot === slot); if (s && s.dur) rename(slot, e.target.value); };
     });
     const r = st.run;
-    $('#vkStatus').textContent = r ? `${r.name}: ${r.n}/${r.repeats} · ${r.phase === 'tx' ? 'передача' : 'слушаю, ещё ' + r.left + ' с'}` : '—';
+    $('#vkStatus').textContent = r ? `${r.name}: ${r.n}/${r.repeats} · ${r.phase === 'tx' ? I18n.t('передача') : I18n.t('слушаю, ещё ') + r.left + I18n.t(' с')}` : '—';
   }
   const nameOf = (slot, row) => ($('.nm', row)?.value || '').trim() || 'CQ ' + slot;
   async function action(a, slot, row) {
     if (a === 'rec') return st.recSlot === slot ? stopRec() : startRec(slot, row);
     if (a === 'file') { st.fileSlot = slot; st.fileName = nameOf(slot, row); $('#vkFile').value = ''; $('#vkFile').click(); return; }
     if (a === 'play') return send({ t: 'vk_get', slot });
-    if (a === 'del') { if (confirm('Удалить сообщение ' + slot + '?')) send({ t: 'vk_delete', slot }); return; }
+    if (a === 'del') { if (confirm(I18n.t('Удалить сообщение ') + slot + '?')) send({ t: 'vk_delete', slot }); return; }
     if (a === 'go') {
       const sv = +$('#vkSig').value;
       const raw = sv ? (S_CAL.find(p => p[1] >= sv) || [130])[0] : 0;
@@ -1905,12 +2032,12 @@ const voiceCq = (() => {
   // ---- запись с микрофона этого устройства
   async function startRec(slot, row) {
     if (st.rec) return;
-    if (!navigator.mediaDevices?.getUserMedia) return toast('Запись недоступна: откройте пульт по https:// или localhost');
+    if (!navigator.mediaDevices?.getUserMedia) return toast(I18n.t('Запись недоступна: откройте пульт по https:// или localhost'));
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: opts.micId ? { exact: opts.micId } : undefined,
         channelCount: 1, echoCancellation: opts.echo, noiseSuppression: opts.ns, autoGainControl: opts.agc } });
-    } catch (e) { return toast('Нет доступа к микрофону: ' + micErrorText(e), 8000); }
+    } catch (e) { return toast(I18n.t('Нет доступа к микрофону: ') + micErrorText(e), 8000); }
     const chunks = [], mr = new MediaRecorder(stream);
     mr.ondataavailable = e => e.data.size && chunks.push(e.data);
     mr.onstop = async () => {
@@ -1919,22 +2046,22 @@ const voiceCq = (() => {
       await upload(slot, st.recName, await new Blob(chunks).arrayBuffer());
     };
     st.rec = mr; st.recSlot = slot; st.recName = nameOf(slot, row);
-    mr.start(); render(); toast('Говорите… «■ Стоп записи», когда закончите');
+    mr.start(); render(); toast(I18n.t('Говорите… «■ Стоп записи», когда закончите'));
     st.recTimer = setTimeout(() => st.rec && stopRec(), 120000);
   }
   function stopRec() { clearTimeout(st.recTimer); if (st.rec && st.rec.state !== 'inactive') st.rec.stop(); }
   $('#vkFile').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
-    if (f.size > 30e6) return toast('Файл слишком большой');
+    if (f.size > 30e6) return toast(I18n.t('Файл слишком большой'));
     await upload(st.fileSlot, st.fileName || f.name.replace(/\.[^.]+$/, ''), await f.arrayBuffer());
   };
   // ---- перекодирование в 48 кГц моно, обрезка тишины, нормализация -> сервер
   async function upload(slot, name, buf) {
     let dec;
     try { dec = await new AudioContext().decodeAudioData(buf); }
-    catch (e) { return toast('Не удалось прочитать звук: ' + e.message); }
+    catch (e) { return toast(I18n.t('Не удалось прочитать звук: ') + e.message); }
     const len = Math.ceil(dec.duration * 48000);
-    if (dec.duration > 120) return toast('Сообщение длиннее 2 минут');
+    if (dec.duration > 120) return toast(I18n.t('Сообщение длиннее 2 минут'));
     const oc = new OfflineAudioContext(1, Math.max(len, 1), 48000);
     const src = oc.createBufferSource(); src.buffer = dec;
     const hp = new BiquadFilterNode(oc, { type: 'highpass', frequency: 120 });
@@ -1943,7 +2070,7 @@ const voiceCq = (() => {
     let x = (await oc.startRendering()).getChannelData(0);
     // обрезаем тишину по краям (порог −40 дБ от пика)
     let peak = 0; for (const v of x) peak = Math.max(peak, Math.abs(v));
-    if (peak < 1e-3) return toast('В записи тишина — проверьте микрофон');
+    if (peak < 1e-3) return toast(I18n.t('В записи тишина — проверьте микрофон'));
     const thr = peak * 0.01; let a = 0, b = x.length - 1;
     while (a < b && Math.abs(x[a]) < thr) a++;
     while (b > a && Math.abs(x[b]) < thr) b--;
@@ -1978,8 +2105,8 @@ const qsoRec = (() => {
   const st = { on: false, t0: 0, k: '', timer: 0 };
   const btn = $('#btnRec');
   const mmss = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-  const kb = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' МБ' : Math.round(n / 1024) + ' КБ';
-  function tick() { btn.textContent = st.on ? '⏺ ' + mmss(Math.floor((Date.now() - st.t0) / 1000)) : '⏺ Запись'; }
+  const kb = n => n > 1048576 ? (n / 1048576).toFixed(1) + I18n.t(' МБ') : Math.round(n / 1024) + I18n.t(' КБ');
+  function tick() { btn.textContent = st.on ? '⏺ ' + mmss(Math.floor((Date.now() - st.t0) / 1000)) : I18n.t('⏺ Запись'); }
   btn.onclick = () => send({ t: st.on ? 'rec_stop' : 'rec_start' });
   function on(m) {
     const was = st.on;
@@ -1987,11 +2114,11 @@ const qsoRec = (() => {
     if (m.on) st.t0 = Date.now() - m.elapsed * 1000;
     btn.classList.toggle('on', m.on);
     clearInterval(st.timer); if (m.on) st.timer = setInterval(tick, 500); tick();
-    btn.title = m.on ? 'Идёт запись: ' + m.name + ' — нажмите, чтобы остановить' : 'Записать связь (приём и передачу) в файл на ПК с сервером';
+    btn.title = m.on ? I18n.t('Идёт запись: ') + m.name + I18n.t(' — нажмите, чтобы остановить') : I18n.t('Записать связь (приём и передачу) в файл на ПК с сервером');
     $('#recList').innerHTML = (m.files || []).map(f =>
       `<div class="row"><a href="rec/${encodeURIComponent(f.name)}?k=${encodeURIComponent(m.k)}" download="${f.name}">💾 ${f.name}</a>
-       <span class="muted">${mmss(f.dur)} · ${kb(f.size)}</span></div>`).join('') || '<span class="muted">Записей пока нет</span>';
-    if (was && !m.on && m.name) toast('Запись сохранена: ' + m.name + ' (папка records)', 6000);
+       <span class="muted">${mmss(f.dur)} · ${kb(f.size)}</span></div>`).join('') || I18n.t('<span class="muted">Записей пока нет</span>');
+    if (was && !m.on && m.name) toast(I18n.t('Запись сохранена: ') + m.name + I18n.t(' (папка records)'), 6000);
   }
   return { on, hello: () => send({ t: 'rec_hello' }), toggle: () => btn.click() };
 })();
@@ -2019,25 +2146,25 @@ const digi2 = (() => {
   }
   function pick(sub, hz) {
     hz = Math.round(hz);
-    if (sub === 'nx') { st.nxFc = hz; $('#nxFc').value = hz; if (!st.nx) { st.nx = true; renderBtns(); } sendNx(); toast(`NAVTEX: центр ${hz} Гц`); }
-    else if (sub === 'psk') { st.pkFc = hz; $('#pkFc').value = hz; if (!st.pk) { st.pk = true; renderBtns(); } sendPk(); toast(`PSK31: ${hz} Гц`); }
-    else toast('SSTV: отдельная подстройка не нужна — сигнал занимает 1200–2300 Гц');
+    if (sub === 'nx') { st.nxFc = hz; $('#nxFc').value = hz; if (!st.nx) { st.nx = true; renderBtns(); } sendNx(); toast(I18n.t`NAVTEX: центр ${hz} Гц`); }
+    else if (sub === 'psk') { st.pkFc = hz; $('#pkFc').value = hz; if (!st.pk) { st.pk = true; renderBtns(); } sendPk(); toast(I18n.t`PSK31: ${hz} Гц`); }
+    else toast(I18n.t('SSTV: отдельная подстройка не нужна — сигнал занимает 1200–2300 Гц'));
     marks();
   }
   function renderBtns() {
     for (const [id, on] of [['#nxDecBtn', st.nx], ['#svDecBtn', st.sv], ['#pkDecBtn', st.pk]]) {
-      $(id).classList.toggle('on', on); $(id).textContent = on ? '● Приём вкл' : '○ Приём выкл';
+      $(id).classList.toggle('on', on); $(id).textContent = on ? I18n.t('● Приём вкл') : I18n.t('○ Приём выкл');
     }
   }
 
   // ================= NAVTEX
-  const NX = [['', '— выбрать —'],
-    ['A', 'A · Новороссийск 518 кГц — 03,07,11,15,19,23 UTC', 518000], ['B', 'B · Керчь 518 кГц — 01,05,09…', 518000],
-    ['C', 'C · Одесса 518 кГц — 02:30, 06:30…', 518000], ['D', 'D · Стамбул 518 кГц — 00:30, 04:30…', 518000],
-    ['E', 'E · Самсун 518 кГц — 00:40, 04:40…', 518000], ['J', 'J · Варна 518 кГц — 01:30, 05:30…', 518000],
-    ['I', 'I · Измир 518 кГц — 01:20, 05:20…', 518000], ['L', 'L · Лимнос 518 кГц — 01:50, 05:50…', 518000],
-    ['n490', '490 кГц — турецкие станции (на турецком)', 490000],
-    ['n4209', '4209,5 кГц — Стамбул (M), Ираклион (S)', 4209500]];
+  const NX = [['', I18n.t('— выбрать —')],
+    ['A', I18n.t('A · Новороссийск 518 кГц — 03,07,11,15,19,23 UTC'), 518000], ['B', I18n.t('B · Керчь 518 кГц — 01,05,09…'), 518000],
+    ['C', I18n.t('C · Одесса 518 кГц — 02:30, 06:30…'), 518000], ['D', I18n.t('D · Стамбул 518 кГц — 00:30, 04:30…'), 518000],
+    ['E', I18n.t('E · Самсун 518 кГц — 00:40, 04:40…'), 518000], ['J', I18n.t('J · Варна 518 кГц — 01:30, 05:30…'), 518000],
+    ['I', I18n.t('I · Измир 518 кГц — 01:20, 05:20…'), 518000], ['L', I18n.t('L · Лимнос 518 кГц — 01:50, 05:50…'), 518000],
+    ['n490', I18n.t('490 кГц — турецкие станции (на турецком)'), 490000],
+    ['n4209', I18n.t('4209,5 кГц — Стамбул (M), Ираклион (S)'), 4209500]];
   fill($('#nxPreset'), NX);
   function sendNx() { send({ t: 'nx_dec', on: st.nx, fc: st.nxFc }); marks(); }
   $('#nxDecBtn').onclick = () => { st.nx = !st.nx; store.set('nxOn', st.nx); renderBtns(); sendNx(); };
@@ -2046,21 +2173,21 @@ const digi2 = (() => {
     const p = NX.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
     setParam('mode', 'USB'); setFreq(p[2] - 1700);
     st.nxFc = 1700; $('#nxFc').value = 1700; if (!st.nx) { st.nx = true; renderBtns(); }
-    sendNx(); toast(`USB ${((p[2] - 1700) / 1000).toFixed(1)} кГц. Сообщения идут по расписанию — время в списке (UTC).`, 6000);
+    sendNx(); toast(I18n.t`USB ${((p[2] - 1700) / 1000).toFixed(1)} кГц. Сообщения идут по расписанию — время в списке (UTC).`, 6000);
     e.target.value = '';
   };
   $('#nxClear').onclick = () => { $('#nxScreen').textContent = ''; $('#nxMsgs').innerHTML = ''; };
   $('#nxAiBtn').onclick = () => {
-    const t = $('#nxScreen').textContent.trim(); if (!t) return toast('Пока нечего переводить');
-    $('#nxAi').classList.remove('hidden'); $('#nxAiBody').textContent = 'Перевожу…'; send({ t: 'nx_ai', text: t.slice(-3000) });
+    const t = $('#nxScreen').textContent.trim(); if (!t) return toast(I18n.t('Пока нечего переводить'));
+    $('#nxAi').classList.remove('hidden'); $('#nxAiBody').textContent = I18n.t('Перевожу…'); send({ t: 'nx_ai', text: t.slice(-3000) });
   };
   $('#nxAiClose').onclick = () => $('#nxAi').classList.add('hidden');
 
   // ================= SSTV
-  const SV = [['', '— выбрать —'], ['s20', '14,230 МГц USB — главная', 14230000, 'USB'], ['s20b', '14,233 МГц USB', 14233000, 'USB'],
-    ['s15', '21,340 МГц USB', 21340000, 'USB'], ['s10', '28,680 МГц USB', 28680000, 'USB'],
-    ['s40', '7,165 МГц LSB', 7165000, 'LSB'], ['s80', '3,730 МГц LSB', 3730000, 'LSB'],
-    ['iss', '145,800 МГц FM — МКС (по объявлениям)', 145800000, 'FM']];
+  const SV = [['', I18n.t('— выбрать —')], ['s20', I18n.t('14,230 МГц USB — главная'), 14230000, 'USB'], ['s20b', I18n.t('14,233 МГц USB'), 14233000, 'USB'],
+    ['s15', I18n.t('21,340 МГц USB'), 21340000, 'USB'], ['s10', I18n.t('28,680 МГц USB'), 28680000, 'USB'],
+    ['s40', I18n.t('7,165 МГц LSB'), 7165000, 'LSB'], ['s80', I18n.t('3,730 МГц LSB'), 3730000, 'LSB'],
+    ['iss', I18n.t('145,800 МГц FM — МКС (по объявлениям)'), 145800000, 'FM']];
   fill($('#svPreset'), SV);
   const cv = $('#svCanvas'), ctx = cv.getContext('2d');
   function sendSv() { send({ t: 'sstv_dec', on: st.sv, auto: $('#svAuto').checked, mode: $('#svMode').value }); marks(); }
@@ -2070,7 +2197,7 @@ const digi2 = (() => {
   $('#svPreset').onchange = e => {
     const p = SV.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
     setParam('mode', p[3]); setFreq(p[2]); if (!st.sv) { st.sv = true; renderBtns(); } sendSv();
-    toast(`${p[3]} ${(p[2] / 1e6).toFixed(3)} МГц — ждём картинку`); e.target.value = '';
+    toast(I18n.t`${p[3]} ${(p[2] / 1e6).toFixed(3)} МГц — ждём картинку`); e.target.value = '';
   };
   function svSize(w, h) {
     st.svW = w; st.svH = h; st.svRows = 0;
@@ -2083,14 +2210,14 @@ const digi2 = (() => {
     ctx.putImageData(img, 0, i); st.svRows = i + 1;
   }
   $('#svPng').onclick = () => {
-    if (!st.svRows) return toast('Картинки пока нет');
+    if (!st.svRows) return toast(I18n.t('Картинки пока нет'));
     const a = document.createElement('a'); a.download = 'sstv_' + Date.now() + '.png'; a.href = cv.toDataURL('image/png'); a.click();
   };
 
   // ================= PSK31
-  const PK = [['', '— выбрать —'], ['80', '80 м — 3580 кГц', 3580000], ['40', '40 м — 7040 кГц', 7040000],
-    ['30', '30 м — 10142 кГц', 10142000], ['20', '20 м — 14070 кГц', 14070000], ['17', '17 м — 18100 кГц', 18100000],
-    ['15', '15 м — 21070 кГц', 21070000], ['12', '12 м — 24920 кГц', 24920000], ['10', '10 м — 28120 кГц', 28120000]];
+  const PK = [['', I18n.t('— выбрать —')], ['80', I18n.t('80 м — 3580 кГц'), 3580000], ['40', I18n.t('40 м — 7040 кГц'), 7040000],
+    ['30', I18n.t('30 м — 10142 кГц'), 10142000], ['20', I18n.t('20 м — 14070 кГц'), 14070000], ['17', I18n.t('17 м — 18100 кГц'), 18100000],
+    ['15', I18n.t('15 м — 21070 кГц'), 21070000], ['12', I18n.t('12 м — 24920 кГц'), 24920000], ['10', I18n.t('10 м — 28120 кГц'), 28120000]];
   fill($('#pkPreset'), PK);
   function sendPk() { send({ t: 'psk_dec', on: st.pk, fc: st.pkFc, afc: $('#pkAfc').checked }); marks(); }
   $('#pkDecBtn').onclick = () => { st.pk = !st.pk; store.set('pkOn', st.pk); renderBtns(); sendPk(); };
@@ -2099,13 +2226,13 @@ const digi2 = (() => {
   $('#pkPreset').onchange = e => {
     const p = PK.find(x => x[0] === e.target.value); if (!p || !p[2]) return;
     setParam('mode', 'DATA-U'); setFreq(p[2]); if (!st.pk) { st.pk = true; renderBtns(); } sendPk();
-    toast('DATA-U ' + (p[2] / 1000) + ' кГц. Правый клик по «ниточке» сигнала на водопаде — настроиться.', 6000); e.target.value = '';
+    toast('DATA-U ' + (p[2] / 1000) + I18n.t(' кГц. Правый клик по «ниточке» сигнала на водопаде — настроиться.'), 6000); e.target.value = '';
   };
   $('#pkClear').onclick = () => { $('#pkScreen').textContent = ''; };
   const PKM = [['CQ', 'CQ CQ CQ de {MY} {MY} {MY} pse k\n'], ['DE', 'de {MY} k\n'], ['73', 'tnx fer QSO, 73 de {MY} sk\n']];
   $('#pkMacros').innerHTML = PKM.map((m, i) => `<button class="btn" data-i="${i}">${m[0]}</button>`).join('');
   $$('#pkMacros button').forEach(b => b.onclick = () => {
-    const t = PKM[+b.dataset.i][1]; if (!myCall()) return toast('Укажите свой позывной на вкладке CW · Морзе');
+    const t = PKM[+b.dataset.i][1]; if (!myCall()) return toast(I18n.t('Укажите свой позывной на вкладке CW · Морзе'));
     pkSend(t);
   });
   function pkSend(t) { t = (t || '').replace(/\{MY\}/g, myCall()); if (t.trim()) send({ t: 'psk_send', text: '\n' + t }); }
@@ -2117,32 +2244,34 @@ const digi2 = (() => {
   // ================= сообщения
   function on(m) {
     switch (m.t) {
+      case 'language': I18n.sync(m.language); break;
+      case 'language_error': $('#language').value = m.language; toast(m.msg, 5000); break;
       case 'nx_state': if (m.fc) { st.nxFc = m.fc; $('#nxFc').value = m.fc; } break;
       case 'nx_rx': addText($('#nxScreen'), '#nxHint', m.text); break;
-      case 'nx_info': $('#nxInfo').textContent = m.sync ? `синхронизация ✓ · ${m.fc} Гц` : `поиск сигнала · ${m.fc} Гц`; break;
+      case 'nx_info': $('#nxInfo').textContent = m.sync ? I18n.t`синхронизация ✓ · ${m.fc} Гц` : I18n.t`поиск сигнала · ${m.fc} Гц`; break;
       case 'nx_msg':
-        $('#nxMsgs').insertAdjacentHTML('afterbegin', `<span class="m">${m.time} <b>${esc(m.b1)}${esc(m.b2)}${esc(m.num)}</b> ${esc(m.station || 'станция ' + m.b1)} — ${esc(m.subject || m.b2)}</span>`);
+        $('#nxMsgs').insertAdjacentHTML('afterbegin', `<span class="m">${m.time} <b>${esc(m.b1)}${esc(m.b2)}${esc(m.num)}</b> ${esc(m.station || I18n.t('станция ') + m.b1)} — ${esc(m.subject || m.b2)}</span>`);
         addText($('#nxScreen'), '#nxHint', `\n──── ${m.station || m.b1}: ${m.subject || m.b2} (${m.time}) ────\n`); break;
-      case 'nx_end': addText($('#nxScreen'), '#nxHint', '\n──── конец сообщения ────\n'); break;
+      case 'nx_end': addText($('#nxScreen'), '#nxHint', I18n.t('\n──── конец сообщения ────\n')); break;
       case 'nx_ai': $('#nxAiBody').textContent = m.ru; $('#nxAiModel').textContent = m.model || ''; break;
-      case 'nx_ai_err': $('#nxAi').classList.remove('hidden'); $('#nxAiBody').textContent = 'Перевод недоступен: ' + m.msg + ' Приём NAVTEX работает и без ИИ.'; break;
+      case 'nx_ai_err': $('#nxAi').classList.remove('hidden'); $('#nxAiBody').textContent = I18n.t('Перевод недоступен: ') + m.msg + I18n.t(' Приём NAVTEX работает и без ИИ.'); break;
       case 'sstv_state':
         if (m.modes && $('#svMode').options.length < 2) $('#svMode').insertAdjacentHTML('beforeend', m.modes.map(x => `<option>${x}</option>`).join(''));
         if (m.state === 'image' && m.w) svSize(m.w, m.h);
-        $('#svInfo').textContent = m.state === 'image' ? 'приём: ' + m.mode : 'ждёт картинку';
-        $('#svSaved').innerHTML = (m.saved || []).length ? '<b>Сохранены на ПК (папка sstv):</b>' + m.saved.slice().reverse().map(n => `<div class="muted">${esc(n)}</div>`).join('') : '';
+        $('#svInfo').textContent = m.state === 'image' ? I18n.t('приём: ') + m.mode : I18n.t('ждёт картинку');
+        $('#svSaved').innerHTML = (m.saved || []).length ? I18n.t('<b>Сохранены на ПК (папка sstv):</b>') + m.saved.slice().reverse().map(n => `<div class="muted">${esc(n)}</div>`).join('') : '';
         break;
       case 'sstv_start':
-        svSize(m.w, m.h); $('#svInfo').textContent = `приём: ${m.mode} (${m.how}${m.shift ? ', расстройка ' + m.shift + ' Гц' : ''})`;
-        toast('SSTV: началась картинка ' + m.mode); break;
+        svSize(m.w, m.h); $('#svInfo').textContent = I18n.t`приём: ${m.mode} (${m.how}${m.shift ? I18n.t(', расстройка ') + m.shift + I18n.t(' Гц') : ''})`;
+        toast(I18n.t('SSTV: началась картинка ') + m.mode); break;
       case 'sstv_done':
-        $('#svInfo').textContent = `${m.mode}: ${m.why}, ${m.rows} строк` + (m.slant ? `, наклон ${m.slant} ppm` : '');
-        if (m.name) { toast('SSTV сохранена: ' + m.name, 5000); $('#svSaved').insertAdjacentHTML('afterbegin', `<div class="muted">${esc(m.name)}</div>`); }
+        $('#svInfo').textContent = I18n.t`${m.mode}: ${m.why}, ${m.rows} строк` + (m.slant ? I18n.t`, наклон ${m.slant} ppm` : '');
+        if (m.name) { toast(I18n.t('SSTV сохранена: ') + m.name, 5000); $('#svSaved').insertAdjacentHTML('afterbegin', `<div class="muted">${esc(m.name)}</div>`); }
         break;
       case 'psk_state': if (m.fc) { st.pkFc = Math.round(m.fc); $('#pkFc').value = st.pkFc; } break;
       case 'psk_rx': addText($('#pkScreen'), '#pkHint', m.text); break;
       case 'psk_info':
-        $('#pkInfo').textContent = `${m.fc} Гц · качество ${Math.round(m.q * 100)}%`;
+        $('#pkInfo').textContent = I18n.t`${m.fc} Гц · качество ${Math.round(m.q * 100)}%`;
         if (Math.abs(m.fc - st.pkFc) >= 1) { st.pkFc = Math.round(m.fc); marks(); }
         break;
       case 'psk_tx_start': st.txText = m.text.trim(); $('#pkTxLine').classList.remove('hidden'); txProg(0); addText($('#pkScreen'), '#pkHint', '\n» ' + st.txText + '\n'); break;
@@ -2184,7 +2313,7 @@ const ft8Desk = (() => {
   // ---------------------------------------------------------------- кнопки
   function renderOn() {
     $('#ftOnBtn').classList.toggle('on', st.on);
-    $('#ftOnBtn').textContent = st.on ? '● Приём вкл' : '○ Приём выкл';
+    $('#ftOnBtn').textContent = st.on ? I18n.t('● Приём вкл') : I18n.t('○ Приём выкл');
   }
   const turnOn = () => { if (!st.on) { st.on = true; store.set('ftOn', true); renderOn(); send({ t: 'ft_hello', on: true }); } };
   $('#ftOnBtn').onclick = () => { st.on = !st.on; store.set('ftOn', st.on); renderOn(); send({ t: 'ft_hello', on: st.on }); };
@@ -2193,7 +2322,7 @@ const ft8Desk = (() => {
     const kHz = +e.target.value; if (!kHz) return;
     if (S.mode !== 'DATA-U') setParam('mode', 'DATA-U');
     setFreq(Math.round(kHz * 1000)); turnOn();
-    toast(`${st.mode}: DATA-U ${kHz} кГц`); e.target.value = '';
+    toast(I18n.t`${st.mode}: DATA-U ${kHz} кГц`); e.target.value = '';
   };
   $('#ftCq').onclick = () => { turnOn(); send({ t: 'ft_cq' }); };
   $('#ftEnable').onclick = () => send({ t: 'ft_enable', on: !st.txEnable });
@@ -2220,8 +2349,8 @@ const ft8Desk = (() => {
     if (!files.length) return;
     let recs = [];
     for (const f of files) recs = recs.concat(parseAdif(await f.text()));
-    if (!recs.length) return toast('В файле не нашлось связей ADIF');
-    toast(`Загружаю ${recs.length} связей…`);
+    if (!recs.length) return toast(I18n.t('В файле не нашлось связей ADIF'));
+    toast(I18n.t`Загружаю ${recs.length} связей…`);
     const N = 5000;
     for (let i = 0; i < recs.length || i === 0; i += N)
       send({ t: 'ft_import', recs: recs.slice(i, i + N), first: i === 0, last: i + N >= recs.length,
@@ -2275,7 +2404,7 @@ const ft8Desk = (() => {
   }
   function setRx(hz) {
     hz = clamp(Math.round(hz), 200, 3000); st.rxHz = hz; $('#ftRxHz').value = hz; store.set('ftRx', hz);
-    $('#ftRxLbl').textContent = hz + ' Гц';
+    $('#ftRxLbl').textContent = hz + I18n.t(' Гц');
     send({ t: 'ft_freq', rx: hz }); marks();
   }
   function pickWf(hz, how) {          // водопад: клик — RX, правый/Shift — TX, двойной — оба
@@ -2291,8 +2420,8 @@ const ft8Desk = (() => {
   // ---------------------------------------------------------------- стандартные сообщения Tx1…Tx6
   const MSG_N = 6;
   $('#ftMsgs').innerHTML = Array.from({ length: MSG_N }, (_, i) =>
-    `<div class="ft-msg" data-i="${i}"><button class="btn small" title="Передавать это сообщение">Tx${i + 1}</button><input class="text" maxlength="37"></div>`).join('') +
-    `<div class="ft-msg"><button class="btn small" id="ftFreeBtn" title="Передать свой текст">Свой</button><input class="text" id="ftText" maxlength="37" placeholder="свободный текст, Enter — передать"></div>`;
+    I18n.t`<div class="ft-msg" data-i="${i}"><button class="btn small" title="Передавать это сообщение">Tx${i + 1}</button><input class="text" maxlength="37"></div>`).join('') +
+    I18n.t`<div class="ft-msg"><button class="btn small" id="ftFreeBtn" title="Передать свой текст">Свой</button><input class="text" id="ftText" maxlength="37" placeholder="свободный текст, Enter — передать"></div>`;
   const msgInputs = $$('#ftMsgs .ft-msg[data-i] input');
   function genMsgs(push = true) {
     const call = $('#ftDxCall').value.trim().toUpperCase(), grid = $('#ftDxGrid').value.trim().toUpperCase();
@@ -2308,7 +2437,7 @@ const ft8Desk = (() => {
   ['#ftDxCall', '#ftDxGrid', '#ftRpt'].forEach(id => $(id).addEventListener('change', () => genMsgs()));
   $$('#ftMsgs .ft-msg[data-i] .btn').forEach(b => b.onclick = () => {
     const i = +b.parentElement.dataset.i, text = msgInputs[i].value.trim();
-    if (!text) return toast('Сначала укажите DX позывной и нажмите «Сформировать»');
+    if (!text) return toast(I18n.t('Сначала укажите DX позывной и нажмите «Сформировать»'));
     turnOn();
     if (i === 5) { send({ t: 'ft_cq' }); return; }
     const call = $('#ftDxCall').value.trim().toUpperCase();
@@ -2399,15 +2528,15 @@ const ft8Desk = (() => {
   function row(it, utc, extra = '') {
     const r = document.createElement('div');
     r.className = 'ft-row ' + it.tags.join(' ') + extra;
-    const badge = it.tags.includes('newdxcc') ? '<b class="bd bd-dx" title="Новая страна">страна</b>'
-      : it.tags.includes('newband') ? '<b class="bd bd-band" title="Страна не сработана на этом диапазоне">диап.</b>' : it.tags.includes('newcall') ? '<b class="bd bd-call" title="С этим позывным связи не было">нов.</b>' : '';
+    const badge = it.tags.includes('newdxcc') ? I18n.t('<b class="bd bd-dx" title="Новая страна">страна</b>')
+      : it.tags.includes('newband') ? I18n.t('<b class="bd bd-band" title="Страна не сработана на этом диапазоне">диап.</b>') : it.tags.includes('newcall') ? I18n.t('<b class="bd bd-call" title="С этим позывным связи не было">нов.</b>') : '';
     r.innerHTML = `<span>${utc}</span><span class="n">${it.snr}</span><span class="n">${it.dt.toFixed(1)}</span><span class="n">${it.f}</span>` +
       `<span class="tx"><span class="msg">${esc(it.text)}</span>${badge}<span class="cty">${esc(it.country || '')}</span></span>`;
-    r.title = (it.call ? 'Нажмите — позвать ' + it.call : '') + (it.country ? `\n${it.country}${it.cont ? ' (' + it.cont + ')' : ''}` : '') +
-      (it.km != null ? `, ${it.km} км` : '') + (it.tags.includes('worked') ? '\nУже работали на этом диапазоне' : '') +
-      (it.tags.includes('newgrid') ? '\nНовый квадрат' : '');
+    r.title = (it.call ? I18n.t('Нажмите — позвать ') + it.call : '') + (it.country ? `\n${it.country}${it.cont ? ' (' + it.cont + ')' : ''}` : '') +
+      (it.km != null ? I18n.t`, ${it.km} км` : '') + (it.tags.includes('worked') ? I18n.t('\nУже работали на этом диапазоне') : '') +
+      (it.tags.includes('newgrid') ? I18n.t('\nНовый квадрат') : '');
     r.onclick = () => {
-      if (!st.myCall) { toast('Укажите свой позывной в настройках FT8'); $('.ft-cfg').open = true; return; }
+      if (!st.myCall) { toast(I18n.t('Укажите свой позывной в настройках FT8')); $('.ft-cfg').open = true; return; }
       turnOn(); setRx(it.f); send({ t: 'ft_call', item: it });
     };
     return r;
@@ -2427,7 +2556,7 @@ const ft8Desk = (() => {
     seen.add(key);
     $('#ftHint')?.remove();
     const utc = fmtUtc(m.slot), hh = `${m.slot.slice(0, 2)}:${m.slot.slice(2, 4)}:${m.slot.slice(4, 6)}`;
-    list.append(sep(`────── ${hh} ${m.mode} ${m.items.length ? '' : '· тишина '}──────`));
+    list.append(sep(`────── ${hh} ${m.mode} ${m.items.length ? '' : I18n.t('· тишина ')}──────`));
     for (const it of m.items) { list.append(row(it, utc)); st.rows++; }
     trim(list, 'rows'); applyFilter();
     toEnd(list);
@@ -2460,19 +2589,19 @@ const ft8Desk = (() => {
     if (document.activeElement !== $('#ftTxHz')) { st.txHz = m.tx_hz; $('#ftTxHz').value = m.tx_hz; }
     if (m.now) st.clockOff = m.now - Date.now() / 1000;
     $$('#ftModeSw button').forEach(b => b.classList.toggle('on', b.dataset.v === m.mode));
-    const bandsHtml = '<option value="">— выбрать —</option>' + m.bands.map(b => `<option value="${b[1]}">${b[0]} — ${b[1]} кГц</option>`).join('');
+    const bandsHtml = I18n.t('<option value="">— выбрать —</option>') + m.bands.map(b => I18n.t`<option value="${b[1]}">${b[0]} — ${b[1]} кГц</option>`).join('');
     if ($('#ftBand').dataset.mode !== m.mode) { $('#ftBand').innerHTML = bandsHtml; $('#ftBand').dataset.mode = m.mode; }
-    $('#ftEnable').textContent = m.tx_enable ? 'TX включён' : 'Включить TX';
+    $('#ftEnable').textContent = m.tx_enable ? I18n.t('TX включён') : I18n.t('Включить TX');
     $('#ftEnable').classList.toggle('tx-on', m.tx_enable);
     $('#ftTune').classList.toggle('tune-on', !!m.tune);
-    $('#ftTune').textContent = m.tune ? 'Настройка…' : 'Настройка';
+    $('#ftTune').textContent = m.tune ? I18n.t('Настройка…') : I18n.t('Настройка');
     $('#ftAutoCq').checked = m.auto_cq; $('#ftAutoSeq').checked = m.auto_seq !== false;
     $('#ftPar').value = String(m.tx_par);
     $('#ftTxMsg').textContent = m.tx_msg || '—';
     const q = m.qso;
-    const STEP = { call: 'зовём', report: 'дали рапорт', roger: 'подтвердили (R)', rr73: 'RR73 — связь в логе', '73': '73 — связь в логе' };
-    $('#ftQso').textContent = q ? `Связь с ${q.call} ${q.grid || ''} · ${STEP[q.step] || q.step} · рапорт ${q.rst_sent || '—'} / ${q.rst_rcvd || '—'}` :
-      (st.txMsg.startsWith('CQ') && m.tx_enable ? 'Зовём CQ…' : 'Связи нет');
+    const STEP = { call: I18n.t('зовём'), report: I18n.t('дали рапорт'), roger: I18n.t('подтвердили (R)'), rr73: I18n.t('RR73 — связь в логе'), '73': I18n.t('73 — связь в логе') };
+    $('#ftQso').textContent = q ? I18n.t`Связь с ${q.call} ${q.grid || ''} · ${STEP[q.step] || q.step} · рапорт ${q.rst_sent || '—'} / ${q.rst_rcvd || '—'}` :
+      (st.txMsg.startsWith('CQ') && m.tx_enable ? I18n.t('Зовём CQ…') : I18n.t('Связи нет'));
     // DX позывной / локатор / рапорт — как в JTDX: подставляются из текущей связи
     const key = q ? `${q.call}|${q.grid}|${q.rst_sent}` : '';
     if (key && key !== st.qsoKey && ![$('#ftDxCall'), $('#ftDxGrid'), $('#ftRpt')].includes(document.activeElement)) {
@@ -2485,27 +2614,29 @@ const ft8Desk = (() => {
     const set = (id, v) => { const el = $('#' + id); if (document.activeElement === el) return; if (el.type === 'checkbox') el.checked = v !== false && !!v; else el.value = v ?? ''; };
     set('ftCall', m.my_call); set('ftGrid', m.my_grid); set('ftPwr', m.pwr); set('ftUdpOn', m.udp_on);
     set('ftUdpHost', m.udp_host); set('ftUdpPort', m.udp_port); set('ftWide', m.wide);
-    if (!m.lib) $('#ftQso').textContent = 'Модуль FT8 не загружен: ' + m.lib_err;
+    if (!m.lib) $('#ftQso').textContent = I18n.t('Модуль FT8 не загружен: ') + m.lib_err;
     set('ftPskOn', m.psk_on); set('ftPskAnt', m.psk_antenna); set('ftAlertDx', m.alert_dxcc);
     const w = m.worked || {};
-    $('#ftWorkedInfo').textContent = `${w.dxcc ?? 0} стран, ${w.calls ?? 0} позывных, ${w.qso ?? 0} связей` +
-      (w.imported ? ` (из загруженного лога ${w.imported})` : ' — загрузите свой журнал, иначе «новыми» считаются все');
-    $('#ftCtyInfo').textContent = m.cty && m.cty.n ? `Справочник стран cty.dat: ${m.cty.n} стран, версия ${m.cty.date}`
-      : 'Справочник стран cty.dat не найден — страны не определяются (программа скачает его сама при доступе в интернет)';
+    $('#ftWorkedInfo').textContent = I18n.t`${w.dxcc ?? 0} стран, ${w.calls ?? 0} позывных, ${w.qso ?? 0} связей` +
+      (w.imported ? I18n.t` (из загруженного лога ${w.imported})` : I18n.t(' — загрузите свой журнал, иначе «новыми» считаются все'));
+    $('#ftCtyInfo').textContent = m.cty && m.cty.n ? I18n.t`Справочник стран cty.dat: ${m.cty.n} стран, версия ${m.cty.date}`
+      : I18n.t('Справочник стран cty.dat не найден — страны не определяются (программа скачает его сама при доступе в интернет)');
     if (st.myCall) $('#ftHeardMap').href = `https://pskreporter.info/pskmap.html?preset&callsign=${encodeURIComponent(st.myCall)}&timerange=1800&txrx=tx`;
-    $('#ftHeardInfo').textContent = m.psk_on ? `PSK Reporter, 30 мин · отправлено ${m.psk_sent}` : 'PSK Reporter выключен';
+    $('#ftHeardInfo').textContent = m.psk_on ? I18n.t`PSK Reporter, 30 мин · отправлено ${m.psk_sent}` : I18n.t('PSK Reporter выключен');
     renderCur(); marks();
   }
 
   function on(m) {
     switch (m.t) {
+      case 'language': I18n.sync(m.language); break;
+      case 'language_error': $('#language').value = m.language; toast(m.msg, 5000); break;
       case 'ft_state': render(m); break;
       case 'ft_dec':
         if (m.now) st.clockOff = m.now - Date.now() / 1000;
         addSlot(m);
         if (!m.old) labelDecodes(m);
         if (m.clock != null) {
-          const el = $('#ftDt'); el.textContent = 'dt ' + (m.clock >= 0 ? '+' : '') + m.clock.toFixed(2) + ' с';
+          const el = $('#ftDt'); el.textContent = 'dt ' + (m.clock >= 0 ? '+' : '') + m.clock.toFixed(2) + I18n.t(' с');
           el.style.color = Math.abs(m.clock) > 0.7 ? 'var(--tx)' : Math.abs(m.clock) > 0.4 ? 'var(--warn)' : '';
         }
         break;
@@ -2514,28 +2645,28 @@ const ft8Desk = (() => {
         $('#ftTxMsg').classList.toggle('on', m.on);
         if (m.on) addMine(m.msg, m.slot);
         break;
-      case 'ft_qso': addLog(m.q); toast(`В лог: ${m.q.call} ${m.q.sent}/${m.q.rcvd}`, 4000); break;
-      case 'ft_log': $('#ftLog').innerHTML = m.items.length ? '' : '<span class="muted">Пока нет</span>'; m.items.forEach(addLog); break;
+      case 'ft_qso': addLog(m.q); toast(I18n.t`В лог: ${m.q.call} ${m.q.sent}/${m.q.rcvd}`, 4000); break;
+      case 'ft_log': $('#ftLog').innerHTML = m.items.length ? '' : I18n.t('<span class="muted">Пока нет</span>'); m.items.forEach(addLog); break;
       case 'ft_note': toast(m.msg, 6000); break;
       case 'ft_alert':
-        toast(`★ Новая страна: ${m.country} — ${m.call} (${m.f} Гц)`, 8000);
+        toast(I18n.t`★ Новая страна: ${m.country} — ${m.call} (${m.f} Гц)`, 8000);
         if ($('#ftAlertSnd').checked) beep();
         break;
       case 'ft_heard': {
         const H = $('#ftHeard');
-        if (m.err && !m.items.length) { H.innerHTML = `<span class="muted">PSK Reporter не ответил: ${esc(m.err)}</span>`; break; }
-        if (!m.items.length) { H.innerHTML = '<span class="muted">За 30 минут вас никто не отметил</span>'; break; }
-        const ago = t => { const s = Math.max(0, Date.now() / 1000 - t); return s < 3600 ? Math.round(s / 60) + ' мин' : Math.round(s / 3600) + ' ч'; };
-        H.innerHTML = `<div class="muted">${m.n} станций, дальше всех — ${esc(m.items[0].call)} ${m.items[0].km ?? '?'} км</div>` +
+        if (m.err && !m.items.length) { H.innerHTML = I18n.t`<span class="muted">PSK Reporter не ответил: ${esc(m.err)}</span>`; break; }
+        if (!m.items.length) { H.innerHTML = I18n.t('<span class="muted">За 30 минут вас никто не отметил</span>'); break; }
+        const ago = t => { const s = Math.max(0, Date.now() / 1000 - t); return s < 3600 ? Math.round(s / 60) + I18n.t(' мин') : Math.round(s / 3600) + I18n.t(' ч'); };
+        H.innerHTML = I18n.t`<div class="muted">${m.n} станций, дальше всех — ${esc(m.items[0].call)} ${m.items[0].km ?? '?'} км</div>` +
           m.items.map(r => `<div title="${esc(r.country || '')}">${esc(r.call.padEnd(10))} ${esc((r.grid || '').slice(0, 4).padEnd(4))} ` +
-            `${String(r.km ?? '').padStart(5)} км ${r.snr != null ? String(r.snr).padStart(3) + ' дБ' : '      '} ${esc(r.band)} · ${ago(r.t)} назад</div>`).join('');
+            I18n.t`${String(r.km ?? '').padStart(5)} км ${r.snr != null ? String(r.snr).padStart(3) + I18n.t(' дБ') : '      '} ${esc(r.band)} · ${ago(r.t)} назад</div>`).join('');
         break;
       }
     }
   }
   function resend() { renderOn(); send({ t: 'ft_hello', on: st.on }); send({ t: 'ft_freq', rx: st.rxHz }); }
   renderOn(); setRxLabel();
-  function setRxLabel() { $('#ftRxHz').value = st.rxHz; $('#ftRxLbl').textContent = st.rxHz + ' Гц'; }
+  function setRxLabel() { $('#ftRxHz').value = st.rxHz; $('#ftRxLbl').textContent = st.rxHz + I18n.t(' Гц'); }
   return { on, resend, setTx, pickWf, marks, onRow };
 })();
 window.ft8Desk = ft8Desk;
