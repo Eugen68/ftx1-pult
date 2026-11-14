@@ -226,3 +226,69 @@ test('Stop cancels a pending media play and foreground recovery keeps RX opt-in'
     assert.equal(w.eval('C.audioOn'), true);
   } finally { dom.window.close(); }
 });
+
+test('standby recovery replaces stale sockets and ignores their late events', async () => {
+  const { dom, sockets, sent } = await open('index.html', 'en', false, false, w => mockAudio(w));
+  try {
+    const w = dom.window, old = sockets[0];
+    w.eval('C.audioOn = true; C.lastMessage = Date.now() - 25000');
+    Object.defineProperty(w.document, 'hidden', { configurable: true, value: false });
+    w.document.dispatchEvent(new w.Event('visibilitychange'));
+    assert.equal(sockets.length, 2);
+    assert.equal(old.readyState, 3);
+    assert.equal(w.eval('C.ws'), sockets[1]);
+    old.onclose();
+    old.onmessage({ data: JSON.stringify({ t: 'server_stopping' }) });
+    assert.equal(w.eval('C.shuttingDown'), undefined);
+    sockets[1].onmessage({ data: JSON.stringify({ t: 'hello_ok', language: 'en', local: false,
+      version: 'test', ptt_method: 'TX1', ctcss: [67], max_tx: 180 }) });
+    assert.equal(w.eval('C.authed'), true);
+    assert.ok(sent.some(m => m.t === 'audio' && m.on === true), 'resubscribe to enabled RX');
+    assert.equal(w.document.documentElement.lang, 'en');
+    await new Promise(resolve => setTimeout(resolve, 0));
+  } finally { dom.window.close(); }
+});
+test('unresponsive OPEN sockets are probed and replaced; shutdown stays stopped', async () => {
+  const { dom, sockets, message } = await open('index.html', 'en');
+  try {
+    const w = dom.window;
+    const schedule = w.setTimeout;
+    let timeout;
+    w.setTimeout = (callback, ms, ...args) => {
+      if (ms === 4000) { timeout = callback; return 9999; }
+      return schedule(callback, ms, ...args);
+    };
+    w.eval('checkConnection(true)');
+    const stamp = w.eval('C.probeStamp');
+    message({ t: 'pong', ts: stamp });
+    timeout();
+    assert.equal(sockets.length, 1, 'matching pong confirms the socket');
+    w.eval('checkConnection(true)');
+    timeout();
+    assert.equal(sockets.length, 2, 'missing pong replaces even an OPEN socket');
+    sockets[1].onmessage({ data: JSON.stringify({ t: 'server_stopping' }) });
+    w.dispatchEvent(new w.Event('online'));
+    w.dispatchEvent(new w.Event('pageshow'));
+    assert.equal(sockets.length, 2, 'explicit shutdown must not reconnect');
+  } finally { dom.window.close(); }
+});
+test('offline startup preserves saved English using the cached translation catalogue', async () => {
+  const { dom, errors } = await open('index.html', 'en', false, false, w => {
+    w.localStorage.setItem('ftx1.language', 'en');
+    w.localStorage.setItem('ftx1.english', JSON.stringify(catalogue));
+    w.fetch = async () => { throw Error('network unavailable after standby'); };
+  });
+  try {
+    assert.equal(dom.window.document.documentElement.lang, 'en');
+    assert.deepEqual(russianText(dom.window.document), []);
+    assert.deepEqual(errors, []);
+    assert.equal(dom.window.localStorage.getItem('ftx1.language'), 'en');
+  } finally { dom.window.close(); }
+});
+test('language API returning no valid language preserves the saved choice', async () => {
+  const { dom } = await open('index.html', 'invalid', false, false, w => {
+    w.localStorage.setItem('ftx1.language', 'en');
+  });
+  try { assert.equal(dom.window.document.documentElement.lang, 'en'); }
+  finally { dom.window.close(); }
+});
