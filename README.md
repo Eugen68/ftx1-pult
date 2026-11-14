@@ -216,7 +216,7 @@ For the English/Russian version in this fork, use the Windows build from
 on the `feat/english-language` branch. The original project's
 [latest release](https://github.com/Evgeny161rus/ftx1-pult/releases/tag/latest)
 is a separate upstream build and may not include this fork's language changes.
-The workflow rebuilds the executable on pushes to `main` and `feat/english-language`.
+Builds run only when explicitly started through GitHub Actions; code and documentation pushes do not build executables.
 To build locally, run `build_exe.bat`.
 
 **Option B — run from source.** Install Python 3.10+ from python.org, selecting *Add python.exe to PATH*,
@@ -273,6 +273,11 @@ The CAT baud rate in the transceiver menu must match the panel setting (default 
 
 The phone uses the same remote interface and saved language setting as the PC.
 Select **English** in the server panel or the remote control's **Settings** tab.
+
+Receive audio uses a media player with lock-screen Play/Pause controls where supported.
+Enable audio while the app is visible before locking the screen. Background playback depends on
+the phone, browser, and battery restrictions; continuous reception during standby still requires testing on a real device.
+PTT is released when the interface becomes hidden.
 
 For access over the internet, use a VPN (WireGuard, ZeroTier, Tailscale, etc.) and the PC's VPN address,
 rather than exposing the server port through the router. For mobile data, select 8 kHz audio quality
